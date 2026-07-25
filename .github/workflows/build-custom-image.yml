@@ -1,9 +1,6 @@
 name: Build custom New API image
 
 on:
-  push:
-    branches:
-      - custom/channel-affinity-fallback
   workflow_dispatch:
 
 permissions:
