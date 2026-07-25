@@ -188,6 +188,64 @@ const renderStatus = (status, channelInfo = undefined, t) => {
   }
 };
 
+const getChannelStatusInfo = (otherInfo) => {
+  if (!otherInfo) {
+    return {};
+  }
+  if (typeof otherInfo === 'object') {
+    return otherInfo;
+  }
+  try {
+    const parsed = JSON.parse(otherInfo);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+};
+
+const renderChannelStatus = (status, record, t) => {
+  const statusTag = renderStatus(status, record.channel_info, t);
+  if (status !== 3) {
+    return statusTag;
+  }
+
+  const statusInfo = getChannelStatusInfo(record.other_info);
+  const reason = String(statusInfo.status_reason || '').trim();
+  const statusTime = Number(statusInfo.status_time);
+  const disabledAt =
+    Number.isFinite(statusTime) && statusTime > 0
+      ? timestamp2string(statusTime)
+      : '';
+
+  if (!reason && !disabledAt) {
+    return statusTag;
+  }
+
+  return (
+    <Tooltip
+      content={
+        <div className='max-w-xs break-words text-xs leading-5'>
+          {reason && <div>{t('原因：') + reason}</div>}
+          {disabledAt && <div>{t('，时间：') + disabledAt}</div>}
+        </div>
+      }
+    >
+      <div className='flex max-w-[220px] flex-col items-start gap-1'>
+        {statusTag}
+        {reason && (
+          <Typography.Text
+            type='tertiary'
+            size='small'
+            className='max-w-full truncate'
+          >
+            {t('原因：') + reason}
+          </Typography.Text>
+        )}
+      </div>
+    </Tooltip>
+  );
+};
+
 const renderMultiKeyStatus = (status, keySize, enabledKeySize, t) => {
   switch (status) {
     case 1:
@@ -492,29 +550,7 @@ export const getChannelsColumns = ({
       key: COLUMN_KEYS.STATUS,
       title: t('状态'),
       dataIndex: 'status',
-      render: (text, record, index) => {
-        if (text === 3) {
-          if (record.other_info === '') {
-            record.other_info = '{}';
-          }
-          let otherInfo = JSON.parse(record.other_info);
-          let reason = otherInfo['status_reason'];
-          let time = otherInfo['status_time'];
-          return (
-            <div>
-              <Tooltip
-                content={
-                  t('原因：') + reason + t('，时间：') + timestamp2string(time)
-                }
-              >
-                {renderStatus(text, record.channel_info, t)}
-              </Tooltip>
-            </div>
-          );
-        } else {
-          return renderStatus(text, record.channel_info, t);
-        }
-      },
+      render: (text, record) => renderChannelStatus(text, record, t),
     },
     {
       key: COLUMN_KEYS.RESPONSE_TIME,
