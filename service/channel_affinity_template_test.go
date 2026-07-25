@@ -34,6 +34,28 @@ func TestApplyChannelAffinityOverrideTemplate_NoTemplate(t *testing.T) {
 	require.Equal(t, base, merged)
 }
 
+func TestChannelAffinityFailureAllowsRetryByDefault(t *testing.T) {
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		RuleName:  "codex cli trace",
+		SkipRetry: false,
+	})
+
+	MarkChannelAffinityUsed(ctx, "default", 9527)
+
+	require.False(t, ShouldSkipRetryAfterChannelAffinityFailure(ctx))
+}
+
+func TestChannelAffinityFailureCanExplicitlySkipRetry(t *testing.T) {
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		RuleName:  "strict-session-affinity",
+		SkipRetry: true,
+	})
+
+	MarkChannelAffinityUsed(ctx, "default", 9527)
+
+	require.True(t, ShouldSkipRetryAfterChannelAffinityFailure(ctx))
+}
+
 func TestApplyChannelAffinityOverrideTemplate_MergeTemplate(t *testing.T) {
 	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
 		RuleName: "rule-with-template",
