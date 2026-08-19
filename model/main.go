@@ -260,6 +260,7 @@ func migrateDB() error {
 
 	err := DB.AutoMigrate(
 		&Channel{},
+		&ChannelDailyQuota{},
 		&Token{},
 		&User{},
 		&UserSession{},

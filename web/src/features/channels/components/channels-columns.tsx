@@ -540,6 +540,63 @@ function BalanceCell({ channel }: { channel: Channel }) {
   )
 }
 
+function DailyQuotaCell({ channel }: { channel: Channel }) {
+  const { t } = useTranslation()
+  const { sensitiveVisible } = useChannels()
+  const limit = channel.daily_quota_limit || 0
+  if (isTagAggregateRow(channel)) {
+    return <span className='text-muted-foreground text-xs'>-</span>
+  }
+
+  const used = channel.daily_quota_used || 0
+  const reserved = channel.daily_quota_reserved || 0
+  const isLimited = limit > 0
+  const committedAndReserved = used + reserved
+  const exhausted = isLimited && committedAndReserved >= limit
+  const remaining = Math.max(0, limit - committedAndReserved)
+  const usedDisplay = formatQuotaWithCurrency(used, { abbreviate: true })
+  const display = isLimited
+    ? `${usedDisplay} / ${formatQuotaWithCurrency(limit, { abbreviate: true })}`
+    : usedDisplay
+
+  return (
+    <TooltipProvider delay={100}>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <StatusBadge
+              label={sensitiveVisible ? display : SENSITIVE_MASK}
+              variant={exhausted ? 'danger' : 'neutral'}
+              size='sm'
+              copyable={false}
+              showDot={false}
+              className='-ml-1.5 cursor-help'
+            />
+          }
+        />
+        <TooltipContent>
+          {sensitiveVisible ? (
+            <div className='space-y-1 text-xs'>
+              <p>{`${t('Used:')} ${formatQuotaWithCurrency(used)}`}</p>
+              {isLimited ? (
+                <>
+                  <p>{`${t('Reserved:')} ${formatQuotaWithCurrency(reserved)}`}</p>
+                  <p>{`${t('Remaining:')} ${formatQuotaWithCurrency(remaining)}`}</p>
+                </>
+              ) : (
+                <p>{t('Unlimited')}</p>
+              )}
+              {exhausted && <p>{t('Daily quota exhausted')}</p>}
+            </div>
+          ) : (
+            <p>{SENSITIVE_MASK}</p>
+          )}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 /**
  * Generate channels columns configuration
  */
@@ -914,6 +971,8 @@ export function useChannelsColumns(
           if (status === 3) {
             let statusReason = ''
             let statusTime = ''
+            let retryAfter = ''
+            let retryIntervalMinutes = 0
             try {
               const otherInfo = channel.other_info
                 ? JSON.parse(channel.other_info)
@@ -923,12 +982,18 @@ export function useChannelsColumns(
                 statusTime = otherInfo.status_time
                   ? formatTimestampToDate(otherInfo.status_time)
                   : ''
+                retryAfter = otherInfo.retry_after
+                  ? formatTimestampToDate(otherInfo.retry_after)
+                  : ''
+                retryIntervalMinutes = Number(
+                  otherInfo.retry_interval_minutes || 0
+                )
               }
             } catch {
               /* empty */
             }
 
-            if (statusReason || statusTime) {
+            if (statusReason || statusTime || retryAfter) {
               return (
                 <TooltipProvider delay={100}>
                   <Tooltip>
@@ -950,6 +1015,13 @@ export function useChannelsColumns(
                         {statusTime && (
                           <div>
                             {t('Time:')} {statusTime}
+                          </div>
+                        )}
+                        {retryAfter && (
+                          <div>
+                            {t('Next recovery test:')} {retryAfter}
+                            {retryIntervalMinutes > 0 &&
+                              ` (${t('Retry Minutes')}: ${retryIntervalMinutes})`}
                           </div>
                         )}
                       </div>
@@ -1045,6 +1117,20 @@ export function useChannelsColumns(
         enableSorting: false,
       },
 
+      {
+        accessorKey: 'current_rpm',
+        header: t('Current RPM'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) => {
+          if (isTagAggregateRow(row.original)) {
+            return <span className='text-muted-foreground text-xs'>-</span>
+          }
+          return <span className='font-mono text-sm'>{row.original.current_rpm}</span>
+        },
+        size: 100,
+        enableSorting: false,
+      },
+
       // Tag column
       {
         accessorKey: 'tag',
@@ -1094,6 +1180,16 @@ export function useChannelsColumns(
         header: t('Used / Remaining'),
         cell: ({ row }) => <BalanceCell channel={row.original} />,
         size: 180,
+      },
+
+      // Daily channel quota (used / configured limit)
+      {
+        accessorKey: 'daily_quota_used',
+        header: t('Daily Quota'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) => <DailyQuotaCell channel={row.original} />,
+        size: 140,
+        enableSorting: false,
       },
 
       // Response Time column

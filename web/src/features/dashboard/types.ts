@@ -164,6 +164,22 @@ export interface ProcessedFlowData {
   filterOptions: FlowFilterOptions
 }
 
+export interface ChannelDispatchItem {
+  id: number
+  name: string
+  value: number
+  share: number
+  requests: number
+  tokens: number
+  quota: number
+  models: string[]
+}
+
+export interface ChannelDispatchData {
+  items: ChannelDispatchItem[]
+  total: number
+}
+
 // ============================================================================
 // Uptime Monitoring Types
 // ============================================================================
@@ -192,6 +208,8 @@ export interface DashboardFilters {
 }
 
 export type ConsumptionDistributionChartType = 'bar' | 'area'
+
+export type ConsumptionDistributionMetric = 'quota' | 'tokens'
 
 export type ModelAnalyticsChartTab = 'trend' | 'proportion' | 'top'
 
@@ -243,6 +261,8 @@ export interface ProcessedChartData {
   spec_model_line: VChartSpec
   spec_rank_bar: VChartSpec
   totalQuotaDisplay: string
+
+  totalTokensDisplay: string
   totalCountDisplay: string
 }
 

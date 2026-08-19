@@ -211,6 +211,18 @@ export const channelFormSchema = z
       ),
     priority: z.number().optional(),
     weight: z.number().optional(),
+    daily_quota_limit: z.number().int().nonnegative().optional(),
+    same_priority_retry_rpm_limit: z.number().int().min(0).max(1000000).optional(),
+    channel_recovery_retry_rules: z
+      .array(
+        z.object({
+          status_code: z.number().int().min(0).max(599),
+          error_contains: z.string().max(512),
+          retry_after_minutes: z.number().int().min(1).max(525600),
+        })
+      )
+      .max(20)
+      .optional(),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
     status: z.number(),
@@ -409,6 +421,9 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   model_mapping: '',
   priority: 0,
   weight: 0,
+  daily_quota_limit: 0,
+  same_priority_retry_rpm_limit: 0,
+  channel_recovery_retry_rules: [],
   test_model: '',
   auto_ban: 1,
   status: CHANNEL_STATUS.ENABLED,
@@ -487,8 +502,7 @@ export function transformChannelToFormDefaults(
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
-        http2_connection_shards:
-          protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
@@ -516,11 +530,53 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
+  let dailyQuotaLimit = 0
+  let samePriorityRetryRpmLimit = 0
+  let channelRecoveryRetryRules: Array<{
+    status_code: number
+    error_contains: string
+    retry_after_minutes: number
+  }> = []
 
   if (channel.settings) {
     try {
       const parsed = JSON.parse(channel.settings)
       vertexKeyType = parsed.vertex_key_type || 'json'
+      dailyQuotaLimit = Math.max(
+        0,
+        Math.trunc(Number(parsed.daily_quota_limit) || 0)
+      )
+      samePriorityRetryRpmLimit = Math.max(
+        0,
+        Math.min(
+          1000000,
+          Math.trunc(Number(parsed.same_priority_retry_rpm_limit) || 0)
+        )
+      )
+      if (Array.isArray(parsed.channel_recovery_retry_rules)) {
+        channelRecoveryRetryRules = parsed.channel_recovery_retry_rules
+          .map((rule: Record<string, unknown>) => ({
+            status_code: Math.max(
+              0,
+              Math.trunc(Number(rule?.status_code) || 0)
+            ),
+            error_contains: String(rule?.error_contains || ''),
+            retry_after_minutes: Math.trunc(
+              Number(rule?.retry_after_minutes) || 0
+            ),
+          }))
+          .filter(
+            (rule: {
+              status_code: number
+              error_contains: string
+              retry_after_minutes: number
+            }) =>
+              rule.status_code <= 599 &&
+              rule.retry_after_minutes >= 1 &&
+              rule.retry_after_minutes <= 525600 &&
+              rule.error_contains.length <= 512
+          )
+      }
       azureResponsesVersion = parsed.azure_responses_version || ''
       isEnterpriseAccount = parsed.openrouter_enterprise === true
       awsKeyType = parsed.aws_key_type || 'ak_sk'
@@ -561,6 +617,9 @@ export function transformChannelToFormDefaults(
     model_mapping: channel.model_mapping || '',
     priority: channel.priority || 0,
     weight: channel.weight || 0,
+    daily_quota_limit: dailyQuotaLimit,
+    same_priority_retry_rpm_limit: samePriorityRetryRpmLimit,
+    channel_recovery_retry_rules: channelRecoveryRetryRules,
     test_model: channel.test_model || '',
     auto_ban: channel.auto_ban ?? 1,
     status: channel.status,
@@ -641,6 +700,42 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       // eslint-disable-next-line no-console
       console.error('Failed to parse existing settings:', error)
     }
+  }
+
+  const dailyQuotaLimit = Math.max(
+    0,
+    Math.trunc(formData.daily_quota_limit || 0)
+  )
+  if (dailyQuotaLimit > 0) {
+    settingsObj.daily_quota_limit = dailyQuotaLimit
+  } else if ('daily_quota_limit' in settingsObj) {
+    delete settingsObj.daily_quota_limit
+  }
+
+  const samePriorityRetryRpmLimit = Math.max(
+    0,
+    Math.min(
+      1000000,
+      Math.trunc(formData.same_priority_retry_rpm_limit || 0)
+    )
+  )
+  if (samePriorityRetryRpmLimit > 0) {
+    settingsObj.same_priority_retry_rpm_limit = samePriorityRetryRpmLimit
+  } else if ('same_priority_retry_rpm_limit' in settingsObj) {
+    delete settingsObj.same_priority_retry_rpm_limit
+  }
+
+  const recoveryRetryRules = (formData.channel_recovery_retry_rules || []).map(
+    (rule) => ({
+      status_code: Math.max(0, Math.trunc(rule.status_code || 0)),
+      error_contains: rule.error_contains.trim(),
+      retry_after_minutes: Math.trunc(rule.retry_after_minutes || 0),
+    })
+  )
+  if (recoveryRetryRules.length > 0) {
+    settingsObj.channel_recovery_retry_rules = recoveryRetryRules
+  } else if ('channel_recovery_retry_rules' in settingsObj) {
+    delete settingsObj.channel_recovery_retry_rules
   }
 
   // Add vertex_key_type for Vertex AI channels (type 41)

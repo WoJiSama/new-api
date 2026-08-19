@@ -187,6 +187,21 @@ func ListSystemTasks(limit int) ([]*SystemTask, error) {
 	return tasks, err
 }
 
+// ListSystemTasksByType returns recent task rows for one task type. Callers
+// that add task-specific payload semantics can inspect a bounded history
+// without relying on database-specific JSON predicates.
+func ListSystemTasksByType(taskType string, limit int) ([]*SystemTask, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var tasks []*SystemTask
+	err := DB.Where("type = ?", taskType).Order("id desc").Limit(limit).Find(&tasks).Error
+	return tasks, err
+}
+
 // GetLatestSystemTask returns the most recent task row of the given type
 // (any status) so the scheduler can decide whether enough time has elapsed
 // since the last run. Returns (nil, nil) when no row exists.

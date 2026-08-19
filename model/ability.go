@@ -106,44 +106,73 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
-	var abilities []Ability
+	return GetChannelWithOptions(group, model, ChannelSelectionOptions{
+		Retry:       retry,
+		RequestPath: requestPath,
+	})
+}
 
-	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry)
+func GetChannelWithOptions(group string, model string, options ChannelSelectionOptions) (*Channel, error) {
+	var abilities []Ability
+	// Query all priorities first so daily-exhausted channels can disappear from
+	// the priority set just like disabled channels do in the memory-cache path.
+	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+		Order("weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
-	if common.UsingMainDatabase(common.DatabaseTypeSQLite) || common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	} else {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	}
+	abilities = filterAbilitiesByRequestPathAndModel(abilities, options.RequestPath, model)
+	abilities, err = filterAbilitiesByDailyQuota(abilities)
 	if err != nil {
 		return nil, err
 	}
-	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
-	channel := Channel{}
-	if len(abilities) > 0 {
-		// Randomly choose one
-		weightSum := uint(0)
-		for _, ability_ := range abilities {
-			weightSum += ability_.Weight + 10
-		}
-		// Randomly choose one
-		weight := common.GetRandomInt(int(weightSum))
-		for _, ability_ := range abilities {
-			weight -= int(ability_.Weight) + 10
-			//log.Printf("weight: %d, ability weight: %d", weight, *ability_.Weight)
-			if weight <= 0 {
-				channel.Id = ability_.ChannelId
-				break
-			}
-		}
-	} else {
+	if len(abilities) == 0 {
 		return nil, nil
 	}
-	err = DB.First(&channel, "id = ?", channel.Id).Error
-	return &channel, err
+
+	channelIDs := make([]int, 0, len(abilities))
+	for _, ability := range abilities {
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	var channels []*Channel
+	if err = DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	return selectChannelWithOptions(channels, options)
+}
+
+func filterAbilitiesByDailyQuota(abilities []Ability) ([]Ability, error) {
+	if len(abilities) == 0 {
+		return abilities, nil
+	}
+	channelIDs := make([]int, 0, len(abilities))
+	seen := make(map[int]struct{}, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := seen[ability.ChannelId]; ok {
+			continue
+		}
+		seen[ability.ChannelId] = struct{}{}
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	var channels []*Channel
+	if err := DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	channels, err := FilterChannelsByDailyQuota(channels)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[int]struct{}, len(channels))
+	for _, channel := range channels {
+		allowed[channel.Id] = struct{}{}
+	}
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := allowed[ability.ChannelId]; ok {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered, nil
 }
 
 // filterAbilitiesByRequestPathAndModel restricts candidates by request path and

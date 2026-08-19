@@ -88,6 +88,11 @@ var channelReadOnlyFields = map[string]struct{}{
 	"balance":              {},
 	"balance_updated_time": {},
 	"used_quota":           {},
+	"daily_quota_limit":    {},
+	"daily_quota_used":     {},
+	"daily_quota_reserved": {},
+	"daily_quota_day":      {},
+	"current_rpm":          {},
 }
 
 func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]any) {
@@ -108,6 +113,21 @@ func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]an
 	}
 	if _, ok := requestData["used_quota"]; ok {
 		channel.UsedQuota = 0
+	}
+	if _, ok := requestData["daily_quota_limit"]; ok {
+		channel.DailyQuotaLimit = 0
+	}
+	if _, ok := requestData["daily_quota_used"]; ok {
+		channel.DailyQuotaUsed = 0
+	}
+	if _, ok := requestData["daily_quota_reserved"]; ok {
+		channel.DailyQuotaReserved = 0
+	}
+	if _, ok := requestData["daily_quota_day"]; ok {
+		channel.DailyQuotaDay = ""
+	}
+	if _, ok := requestData["current_rpm"]; ok {
+		channel.CurrentRPM = 0
 	}
 }
 

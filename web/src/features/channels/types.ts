@@ -71,6 +71,11 @@ export const channelSchema = z.object({
     multi_key_mode: 'random',
   }),
   settings: z.string().default('{}'), // other_settings JSON
+  daily_quota_limit: z.number().default(0),
+  daily_quota_used: z.number().default(0),
+  daily_quota_reserved: z.number().default(0),
+  daily_quota_day: z.string().default(''),
+  current_rpm: z.number().default(0),
 })
 
 export type Channel = z.infer<typeof channelSchema>
@@ -91,6 +96,9 @@ export interface ChannelSettings {
 }
 
 export interface ChannelOtherSettings {
+  daily_quota_limit?: number
+  same_priority_retry_rpm_limit?: number
+  channel_recovery_retry_rules?: ChannelRecoveryRetryRule[]
   azure_responses_version?: string
   vertex_key_type?: 'json' | 'api_key'
   openrouter_enterprise?: boolean
@@ -109,6 +117,12 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_check_time?: number
   upstream_model_update_last_detected_models?: string[]
   advanced_custom?: AdvancedCustomConfig
+}
+
+export interface ChannelRecoveryRetryRule {
+  status_code?: number
+  error_contains?: string
+  retry_after_minutes: number
 }
 
 export interface AdvancedCustomConfig {

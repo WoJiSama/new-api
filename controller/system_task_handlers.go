@@ -36,6 +36,36 @@ func (channelTestHandler) Enabled() bool {
 }
 
 func (channelTestHandler) Interval() time.Duration {
+	globalInterval := channelTestGlobalInterval()
+	interval := globalInterval
+
+	// Keep regular scheduled-all tests at their configured global cadence even
+	// when shorter recovery rules insert recovery-only task runs in between.
+	if lastFullAt, err := latestFullChannelTestAt(); err == nil && lastFullAt > 0 {
+		untilFull := time.Until(time.Unix(lastFullAt, 0).Add(globalInterval))
+		interval = minChannelTestInterval(interval, untilFull)
+	}
+	// A matching channel rule is persisted as retry_after when it is disabled.
+	// Waking at the earliest deadline allows a shorter per-channel interval
+	// without testing healthy channels more frequently.
+	if retryAfter, err := model.GetEarliestChannelRecoveryRetryAfter(); err == nil && retryAfter > 0 {
+		interval = minChannelTestInterval(interval, time.Until(time.Unix(retryAfter, 0)))
+	}
+	if interval < time.Second {
+		return time.Second
+	}
+	return interval
+}
+
+func (channelTestHandler) NewPayload() any {
+	lastFullAt, err := latestFullChannelTestAt()
+	if err != nil || lastFullAt == 0 || time.Now().Unix()-lastFullAt >= int64(channelTestGlobalInterval().Seconds()) {
+		return nil // Preserve the official empty-payload shape for a full cycle.
+	}
+	return channelTestTaskPayload{RecoveryOnly: true}
+}
+
+func channelTestGlobalInterval() time.Duration {
 	minutes := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
 	if minutes <= 0 {
 		minutes = 10
@@ -43,7 +73,32 @@ func (channelTestHandler) Interval() time.Duration {
 	return time.Duration(minutes * float64(time.Minute))
 }
 
-func (channelTestHandler) NewPayload() any { return nil }
+func minChannelTestInterval(current, candidate time.Duration) time.Duration {
+	if candidate <= 0 || candidate < time.Second {
+		return time.Second
+	}
+	if candidate < current {
+		return candidate
+	}
+	return current
+}
+
+func latestFullChannelTestAt() (int64, error) {
+	tasks, err := model.ListSystemTasksByType(model.SystemTaskTypeChannelTest, 100)
+	if err != nil {
+		return 0, err
+	}
+	for _, task := range tasks {
+		payload := channelTestTaskPayload{}
+		if err := task.DecodePayload(&payload); err != nil {
+			continue
+		}
+		if !payload.RecoveryOnly {
+			return task.UpdatedAt, nil
+		}
+	}
+	return 0, nil
+}
 
 // channelTestTaskPayload controls one channel_test run. A nil/empty payload is a
 // scheduled run, which uses the configured monitor ChannelTestMode and does not
@@ -51,8 +106,9 @@ func (channelTestHandler) NewPayload() any { return nil }
 // Notify=true to reproduce the legacy manual behavior (test every channel and
 // notify root on completion).
 type channelTestTaskPayload struct {
-	Mode   string `json:"mode,omitempty"`
-	Notify bool   `json:"notify,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	Notify       bool   `json:"notify,omitempty"`
+	RecoveryOnly bool   `json:"recovery_only,omitempty"`
 }
 
 func (channelTestHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
@@ -61,7 +117,7 @@ func (channelTestHandler) Run(ctx context.Context, task *model.SystemTask, runne
 		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return
 	}
-	summary, err := runChannelTestTask(ctx, payload.Mode, payload.Notify, service.NewSystemTaskProgressReporter(task, runnerID))
+	summary, err := runChannelTestTask(ctx, payload.Mode, payload.Notify, payload.RecoveryOnly, service.NewSystemTaskProgressReporter(task, runnerID))
 	if err != nil {
 		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return

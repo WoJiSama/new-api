@@ -32,6 +32,7 @@ export {
   openExternalSpeedTest,
   getDefaultPingStatus,
 } from './api-info'
+export { buildChannelDispatchData } from './channel-dispatch'
 export { processChartData, processUserChartData } from './charts'
 export {
   buildDashboardFlowData,

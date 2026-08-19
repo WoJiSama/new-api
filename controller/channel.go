@@ -165,6 +165,14 @@ func GetAllChannels(c *gin.Context) {
 		}
 	}
 
+	if err := model.PopulateChannelDailyQuota(channelData); err != nil {
+		common.SysError("failed to load channel daily quotas: " + err.Error())
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道每日额度失败，请稍后重试"})
+		return
+	}
+	if err := service.PopulateChannelRPM(c.Request.Context(), channelData); err != nil {
+		common.SysError("failed to load channel RPM: " + err.Error())
+	}
 	for _, datum := range channelData {
 		clearChannelInfo(datum)
 	}
@@ -378,6 +386,14 @@ func SearchChannels(c *gin.Context) {
 
 	pagedData := channelData[startIdx:endIdx]
 
+	if err := model.PopulateChannelDailyQuota(pagedData); err != nil {
+		common.SysError("failed to load searched channel daily quotas: " + err.Error())
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道每日额度失败，请稍后重试"})
+		return
+	}
+	if err := service.PopulateChannelRPM(c.Request.Context(), pagedData); err != nil {
+		common.SysError("failed to load searched channel RPM: " + err.Error())
+	}
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
 	}
@@ -406,6 +422,13 @@ func GetChannel(c *gin.Context) {
 		return
 	}
 	if channel != nil {
+		if err := model.PopulateChannelDailyQuota([]*model.Channel{channel}); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := service.PopulateChannelRPM(c.Request.Context(), []*model.Channel{channel}); err != nil {
+			common.SysError("failed to load channel RPM: " + err.Error())
+		}
 		clearChannelInfo(channel)
 	}
 	c.JSON(http.StatusOK, gin.H{

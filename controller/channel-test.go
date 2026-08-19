@@ -988,6 +988,9 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 			processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 			summary.Disabled++
 		}
+		if !isChannelEnabled && channel.Status == common.ChannelStatusAutoDisabled && (newAPIError != nil || result.localErr != nil) {
+			service.RefreshChannelRecoveryRetry(channel.Id, newAPIError)
+		}
 
 		// enable channel
 		if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
@@ -1022,7 +1025,7 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 // trigger passes ChannelTestModeScheduledAll to test every channel. When notify
 // is set the root user is notified on completion. Cross-instance execution is
 // guarded by the system task per-type lock, so no process-local guard is needed.
-func runChannelTestTask(ctx context.Context, mode string, notify bool, report func(processed, total int)) (channelTestSummary, error) {
+func runChannelTestTask(ctx context.Context, mode string, notify bool, recoveryOnly bool, report func(processed, total int)) (channelTestSummary, error) {
 	testUserID, err := resolveChannelTestUserID(nil)
 	if err != nil {
 		return channelTestSummary{}, err
@@ -1031,10 +1034,11 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 	if err != nil {
 		return channelTestSummary{}, err
 	}
+	isScheduled := strings.TrimSpace(mode) == "" && !notify
 	if strings.TrimSpace(mode) == "" {
 		mode = operation_setting.GetMonitorSetting().ChannelTestMode
 	}
-	selected := selectChannelsForAutomaticTest(channels, mode)
+	selected := selectChannelsForChannelTest(channels, mode, isScheduled, recoveryOnly, time.Now())
 	allowDisable := mode != operation_setting.ChannelTestModePassiveRecovery
 	summary := performChannelTests(ctx, selected, testUserID, allowDisable, report)
 	if notify && (ctx == nil || ctx.Err() == nil) {
@@ -1044,12 +1048,26 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 }
 
 func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*model.Channel {
+	return selectChannelsForChannelTest(channels, mode, false, false, time.Now())
+}
+
+// selectChannelsForChannelTest filters a scheduled recovery-only pass down to
+// due auto-disabled channels. Full scheduled passes still skip a custom
+// recovery deadline, while manual tests intentionally bypass it so an admin
+// can verify or restore a channel immediately.
+func selectChannelsForChannelTest(channels []*model.Channel, mode string, scheduled bool, recoveryOnly bool, now time.Time) []*model.Channel {
 	selected := make([]*model.Channel, 0, len(channels))
 	for _, channel := range channels {
 		if channel.Status == common.ChannelStatusManuallyDisabled {
 			continue
 		}
+		if recoveryOnly && channel.Status != common.ChannelStatusAutoDisabled {
+			continue
+		}
 		if mode == operation_setting.ChannelTestModePassiveRecovery && channel.Status != common.ChannelStatusAutoDisabled {
+			continue
+		}
+		if scheduled && channel.Status == common.ChannelStatusAutoDisabled && !channel.IsRecoveryTestDue(now) {
 			continue
 		}
 		selected = append(selected, channel)
@@ -1062,8 +1080,9 @@ func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*m
 // rejected so the caller does not mistake a scheduled run for this manual one.
 func TestAllChannels(c *gin.Context) {
 	task, created, err := service.EnqueueSystemTask(model.SystemTaskTypeChannelTest, channelTestTaskPayload{
-		Mode:   operation_setting.ChannelTestModeScheduledAll,
-		Notify: true,
+		Mode:         operation_setting.ChannelTestModeScheduledAll,
+		Notify:       true,
+		RecoveryOnly: false,
 	})
 	if err != nil {
 		common.ApiError(c, err)

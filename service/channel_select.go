@@ -11,12 +11,14 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	RequestPath  string
-	Retry        *int
-	resetNextTry bool
+	Ctx                *gin.Context
+	TokenGroup         string
+	ModelName          string
+	RequestPath        string
+	Retry              *int
+	previousPriority   *int64
+	excludedChannelIDs map[int]struct{}
+	resetNextTry       bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -43,6 +45,43 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+func (p *RetryParam) selectionOptions() model.ChannelSelectionOptions {
+	return model.ChannelSelectionOptions{
+		Retry:              p.GetRetry(),
+		RequestPath:        p.RequestPath,
+		PreviousPriority:   p.previousPriority,
+		ExcludedChannelIDs: p.excludedChannelIDs,
+	}
+}
+
+func (p *RetryParam) IsSamePriorityRetry(channel *model.Channel) bool {
+	return channel != nil && p.previousPriority != nil && p.GetRetry() > 0 && channel.GetPriority() == *p.previousPriority
+}
+
+func (p *RetryParam) ExcludeChannel(channel *model.Channel) {
+	if channel == nil {
+		return
+	}
+	if p.excludedChannelIDs == nil {
+		p.excludedChannelIDs = make(map[int]struct{})
+	}
+	p.excludedChannelIDs[channel.Id] = struct{}{}
+}
+
+func (p *RetryParam) RecordSelectedChannel(channel *model.Channel) {
+	if channel == nil {
+		return
+	}
+	priority := channel.GetPriority()
+	p.previousPriority = &priority
+	p.ExcludeChannel(channel)
+}
+
+func (p *RetryParam) ResetChannelSelection() {
+	p.previousPriority = nil
+	p.excludedChannelIDs = nil
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -115,7 +154,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			options := param.selectionOptions()
+			options.Retry = priorityRetry
+			channel, _ = model.GetRandomSatisfiedChannelWithOptions(autoGroup, param.ModelName, options)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -123,6 +164,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				// 重置状态以尝试下一个分组
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, 0)
+				param.ResetChannelSelection()
 				// Reset retry counter so outer loop can continue for next group
 				// 重置重试计数器，以便外层循环可以为下一个分组继续
 				param.SetRetry(0)
@@ -153,7 +195,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		channel, err = model.GetRandomSatisfiedChannelWithOptions(param.TokenGroup, param.ModelName, param.selectionOptions())
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

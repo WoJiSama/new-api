@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -310,6 +311,39 @@ func TestSelectChannelsForAutomaticTestScheduledSkipsManualDisabled(t *testing.T
 	require.Len(t, selected, 2)
 	require.Equal(t, 1, selected[0].Id)
 	require.Equal(t, 2, selected[1].Id)
+}
+
+func TestSelectChannelsForScheduledRecoveryRespectsRetryAfterButManualBypassesIt(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	channel := &model.Channel{Id: 1, Status: common.ChannelStatusAutoDisabled}
+	channel.SetOtherInfo(map[string]interface{}{"retry_after": now.Add(time.Minute).Unix()})
+
+	scheduled := selectChannelsForChannelTest(
+		[]*model.Channel{channel},
+		operation_setting.ChannelTestModeScheduledAll,
+		true,
+		true,
+		now,
+	)
+	require.Empty(t, scheduled)
+
+	manual := selectChannelsForChannelTest(
+		[]*model.Channel{channel},
+		operation_setting.ChannelTestModeScheduledAll,
+		false,
+		false,
+		now,
+	)
+	require.Len(t, manual, 1)
+
+	due := selectChannelsForChannelTest(
+		[]*model.Channel{channel},
+		operation_setting.ChannelTestModeScheduledAll,
+		true,
+		true,
+		now.Add(time.Minute),
+	)
+	require.Len(t, due, 1)
 }
 
 func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {

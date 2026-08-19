@@ -51,7 +51,7 @@ import {
   useCallback,
   useRef,
 } from 'react'
-import { type SubmitErrorHandler, useForm } from 'react-hook-form'
+import { type SubmitErrorHandler, useFieldArray, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -335,6 +335,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.remark?.trim() ||
     values.priority ||
     values.weight ||
+    values.same_priority_retry_rpm_limit ||
     values.proxy?.trim() ||
     values.system_prompt?.trim() ||
     values.force_format ||
@@ -344,6 +345,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     (values.http_protocol && values.http_protocol !== 'auto') ||
     (values.http2_connection_shards != null &&
       values.http2_connection_shards > 1) ||
+    Boolean(values.channel_recovery_retry_rules?.length) ||
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
@@ -713,6 +715,10 @@ export function ChannelMutateDrawer({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
   })
+  const recoveryRetryRuleFields = useFieldArray({
+    control: form.control,
+    name: 'channel_recovery_retry_rules',
+  })
 
   // Watch form values for conditional rendering
   const multiKeyMode = form.watch('multi_key_mode')
@@ -736,6 +742,7 @@ export function ChannelMutateDrawer({
   const currentAdvancedCustom = form.watch('advanced_custom')
   const currentPriority = form.watch('priority')
   const currentWeight = form.watch('weight')
+  const currentRecoveryRetryRules = form.watch('channel_recovery_retry_rules')
   const currentTestModel = form.watch('test_model')
   const currentAutoBan = form.watch('auto_ban')
   const currentTag = form.watch('tag')
@@ -1053,7 +1060,8 @@ export function ChannelMutateDrawer({
     overrideRulesConfigured ||
     extraSettingsConfigured ||
     fieldPassthroughConfigured ||
-    upstreamModelDetectionConfigured
+    upstreamModelDetectionConfigured ||
+    currentRecoveryRetryRules?.length
   )
   const advancedNavChildren: ChannelEditorNavChildItem[] = [
     {
@@ -3638,7 +3646,7 @@ export function ChannelMutateDrawer({
                               icon={<Route className='h-3.5 w-3.5' />}
                               iconTone='info'
                             />
-                            <div className='grid gap-4 sm:grid-cols-2'>
+                            <div className='grid gap-4 sm:grid-cols-3'>
                               <FormField
                                 control={form.control}
                                 name='priority'
@@ -3686,6 +3694,193 @@ export function ChannelMutateDrawer({
                                   </FormItem>
                                 )}
                               />
+
+                              <FormField
+                                control={form.control}
+                                name='daily_quota_limit'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>{t('Daily Quota')}</FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min='0'
+                                        step='1'
+                                        placeholder='0'
+                                        {...field}
+                                        onChange={(e) =>
+                                          field.onChange(Number(e.target.value))
+                                        }
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'Daily channel quota limit in quota units. Set 0 for no limit.'
+                                      )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='same_priority_retry_rpm_limit'
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>
+                                      {t('Same-Priority Retry RPM')}
+                                    </FormLabel>
+                                    <FormControl>
+                                      <Input
+                                        type='number'
+                                        min='0'
+                                        max='1000000'
+                                        step='1'
+                                        placeholder='0'
+                                        {...field}
+                                        onChange={(event) =>
+                                          field.onChange(Number(event.target.value))
+                                        }
+                                      />
+                                    </FormControl>
+                                    <FormDescription>
+                                      {t(
+                                        'Only same-priority retries are admitted below this 60-second RPM limit. New requests are unaffected. Set 0 to disable.'
+                                      )}
+                                    </FormDescription>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                            </div>
+
+                            <div className='border-border/60 space-y-3 border-t pt-4'>
+                              <div className='flex flex-wrap items-center justify-between gap-3'>
+                                <div className='space-y-0.5'>
+                                  <FormLabel>
+                                    {t('Recovery Retry Rules')}
+                                  </FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'After automatic disable, the first matching rule controls the next scheduled recovery test. Leave status code or keyword empty to match any.'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <Button
+                                  type='button'
+                                  variant='outline'
+                                  size='sm'
+                                  onClick={() =>
+                                    recoveryRetryRuleFields.append({
+                                      status_code: 429,
+                                      error_contains: '',
+                                      retry_after_minutes: 10,
+                                    })
+                                  }
+                                >
+                                  <Plus className='h-4 w-4' />
+                                  {t('Add')}
+                                </Button>
+                              </div>
+                              {recoveryRetryRuleFields.fields.length > 0 && (
+                                <div className='divide-border overflow-hidden border-y'>
+                                  {recoveryRetryRuleFields.fields.map(
+                                    (rule, index) => (
+                                      <div
+                                        key={rule.id}
+                                        className='grid gap-3 px-3 py-3 sm:grid-cols-[112px_minmax(0,1fr)_132px_36px] sm:items-end'
+                                      >
+                                        <FormField
+                                          control={form.control}
+                                          name={`channel_recovery_retry_rules.${index}.status_code`}
+                                          render={({ field }) => (
+                                            <FormItem>
+                                              <FormLabel className='text-xs'>
+                                                {t('Status Code')}
+                                              </FormLabel>
+                                              <FormControl>
+                                                <Input
+                                                  type='number'
+                                                  min='0'
+                                                  max='599'
+                                                  placeholder={t('Any')}
+                                                  {...field}
+                                                  onChange={(event) =>
+                                                    field.onChange(
+                                                      Number(event.target.value) ||
+                                                        0
+                                                    )
+                                                  }
+                                                />
+                                              </FormControl>
+                                              <FormMessage />
+                                            </FormItem>
+                                          )}
+                                        />
+                                        <FormField
+                                          control={form.control}
+                                          name={`channel_recovery_retry_rules.${index}.error_contains`}
+                                          render={({ field }) => (
+                                            <FormItem>
+                                              <FormLabel className='text-xs'>
+                                                {t('Error Keyword')}
+                                              </FormLabel>
+                                              <FormControl>
+                                                <Input
+                                                  placeholder='WEEKLY_LIMIT_EXCEEDED'
+                                                  {...field}
+                                                />
+                                              </FormControl>
+                                              <FormMessage />
+                                            </FormItem>
+                                          )}
+                                        />
+                                        <FormField
+                                          control={form.control}
+                                          name={`channel_recovery_retry_rules.${index}.retry_after_minutes`}
+                                          render={({ field }) => (
+                                            <FormItem>
+                                              <FormLabel className='text-xs'>
+                                                {t('Retry Minutes')}
+                                              </FormLabel>
+                                              <FormControl>
+                                                <Input
+                                                  type='number'
+                                                  min='1'
+                                                  max='525600'
+                                                  step='1'
+                                                  {...field}
+                                                  onChange={(event) =>
+                                                    field.onChange(
+                                                      Number(event.target.value) ||
+                                                        0
+                                                    )
+                                                  }
+                                                />
+                                              </FormControl>
+                                              <FormMessage />
+                                            </FormItem>
+                                          )}
+                                        />
+                                        <Button
+                                          type='button'
+                                          variant='ghost'
+                                          size='icon'
+                                          className='mb-0.5'
+                                          title={t('Remove')}
+                                          aria-label={t('Remove')}
+                                          onClick={() =>
+                                            recoveryRetryRuleFields.remove(index)
+                                          }
+                                        >
+                                          <Trash2 className='h-4 w-4' />
+                                        </Button>
+                                      </div>
+                                    )
+                                  )}
+                                </div>
+                              )}
                             </div>
 
                             <FormField
@@ -4233,9 +4428,7 @@ export function ChannelMutateDrawer({
                                         <SelectValue />
                                       </SelectTrigger>
                                     </FormControl>
-                                    <SelectContent
-                                      alignItemWithTrigger={false}
-                                    >
+                                    <SelectContent alignItemWithTrigger={false}>
                                       <SelectGroup>
                                         <SelectItem value='auto'>
                                           {t('Auto')}

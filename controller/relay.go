@@ -173,6 +173,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
+			service.ReleaseChannelDailyQuotaForAttempt(relayInfo)
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
@@ -193,17 +194,48 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
-		channel, channelErr := getChannel(c, relayInfo, retryParam)
-		if channelErr != nil {
-			logger.LogError(c, channelErr.Error())
-			newAPIError = channelErr
+		newAPIError = nil
+		var channel *model.Channel
+		for {
+			var channelErr *types.NewAPIError
+			channel, channelErr = getChannel(c, relayInfo, retryParam)
+			if channelErr != nil {
+				logger.LogError(c, channelErr.Error())
+				newAPIError = channelErr
+				break
+			}
+			if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
+				newAPIError = billingErr
+				break
+			}
+			reserved, reserveErr := service.ReserveChannelDailyQuotaForAttempt(relayInfo, channel)
+			if reserveErr != nil {
+				newAPIError = types.NewError(fmt.Errorf("预留渠道 #%d 的每日额度失败: %w", channel.Id, reserveErr), types.ErrorCodeUpdateDataError)
+				break
+			}
+			if !reserved {
+				retryParam.ExcludeChannel(channel)
+				continue
+			}
+
+			rpmReserved, rpmErr := service.ReserveChannelRPMForAttempt(c.Request.Context(), channel, retryParam.IsSamePriorityRetry(channel))
+			if rpmErr != nil {
+				service.ReleaseChannelDailyQuotaForAttempt(relayInfo)
+				newAPIError = types.NewError(fmt.Errorf("预留渠道 #%d 的 RPM 失败: %w", channel.Id, rpmErr), types.ErrorCodeUpdateDataError)
+				break
+			}
+			if !rpmReserved {
+				service.ReleaseChannelDailyQuotaForAttempt(relayInfo)
+				retryParam.ExcludeChannel(channel)
+				continue
+			}
+			retryParam.RecordSelectedChannel(channel)
+			break
+		}
+		if newAPIError != nil {
 			break
 		}
 		addUsedChannel(c, channel.Id)
-		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
-			newAPIError = billingErr
-			break
-		}
 
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
@@ -229,12 +261,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
+			// Some relay formats do not emit token usage. Release their zero-usage
+			// reservation here; normal settlement has already cleared it.
+			service.SettleChannelDailyQuotaForAttempt(relayInfo)
 			relayInfo.LastError = nil
 			return
 		}
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
+		service.ReleaseChannelDailyQuotaForAttempt(relayInfo)
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
@@ -299,13 +335,17 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
+		channelID := c.GetInt("channel_id")
+		if channel, err := model.CacheGetChannel(channelID); err == nil && channel != nil {
+			return channel, nil
+		}
 		autoBan := c.GetBool("auto_ban")
 		autoBanInt := 1
 		if !autoBan {
 			autoBanInt = 0
 		}
 		return &model.Channel{
-			Id:      c.GetInt("channel_id"),
+			Id:      channelID,
 			Type:    c.GetInt("channel_type"),
 			Name:    c.GetString("channel_name"),
 			AutoBan: &autoBanInt,
@@ -366,7 +406,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	if service.ShouldDisableChannel(err) && channelError.AutoBan {
 		gopool.Go(func() {
-			service.DisableChannel(channelError, err.ErrorWithStatusCode())
+			service.DisableChannel(channelError, err.ErrorWithStatusCode(), err)
 		})
 	}
 
@@ -522,24 +562,45 @@ func RelayTask(c *gin.Context) {
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		taskErr = nil
 		var channel *model.Channel
-
-		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
-			channel = lockedCh
-			if retryParam.GetRetry() > 0 {
-				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
-					taskErr = service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError)
+		for {
+			lockedChannel := false
+			if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
+				channel = lockedCh
+				lockedChannel = true
+				if retryParam.GetRetry() > 0 {
+					if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
+						taskErr = service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError)
+						break
+					}
+				}
+			} else {
+				var channelErr *types.NewAPIError
+				channel, channelErr = getChannel(c, relayInfo, retryParam)
+				if channelErr != nil {
+					logger.LogError(c, channelErr.Error())
+					taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "get_channel_failed", http.StatusInternalServerError)
 					break
 				}
 			}
-		} else {
-			var channelErr *types.NewAPIError
-			channel, channelErr = getChannel(c, relayInfo, retryParam)
-			if channelErr != nil {
-				logger.LogError(c, channelErr.Error())
-				taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "get_channel_failed", http.StatusInternalServerError)
+
+			rpmReserved, rpmErr := service.ReserveChannelRPMForAttempt(c.Request.Context(), channel, !lockedChannel && retryParam.IsSamePriorityRetry(channel))
+			if rpmErr != nil {
+				taskErr = service.TaskErrorWrapperLocal(rpmErr, "reserve_channel_rpm_failed", http.StatusInternalServerError)
 				break
 			}
+			if !rpmReserved {
+				retryParam.ExcludeChannel(channel)
+				continue
+			}
+			if !lockedChannel {
+				retryParam.RecordSelectedChannel(channel)
+			}
+			break
+		}
+		if taskErr != nil {
+			break
 		}
 
 		addUsedChannel(c, channel.Id)

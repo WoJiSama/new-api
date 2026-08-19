@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -55,6 +56,14 @@ type Channel struct {
 
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
+	// Daily quota data is calculated from settings plus the separate daily ledger.
+	// These fields are response-only and must not alter the upstream table schema.
+	DailyQuotaLimit    int64  `json:"daily_quota_limit" gorm:"-"`
+	DailyQuotaUsed     int64  `json:"daily_quota_used" gorm:"-"`
+	DailyQuotaReserved int64  `json:"daily_quota_reserved" gorm:"-"`
+	DailyQuotaDay      string `json:"daily_quota_day" gorm:"-"`
+	CurrentRPM         int64  `json:"current_rpm" gorm:"-"`
+
 	// cache info
 	Keys []string `json:"-" gorm:"-"`
 }
@@ -68,6 +77,23 @@ type ChannelInfo struct {
 	MultiKeyPollingIndex   int                   `json:"multi_key_polling_index"`             // 多Key模式下轮询的key索引
 	MultiKeyMode           constant.MultiKeyMode `json:"multi_key_mode"`
 }
+
+// ChannelStatusUpdateOptions records the recovery deadline selected while a
+// channel is automatically disabled. It is deliberately kept in existing JSON
+// fields so upgrading upstream does not require a channels-table migration.
+type ChannelStatusUpdateOptions struct {
+	RetryAfter          int64
+	RetryIntervalMinute int64
+	RetryRuleStatusCode int
+	RetryRuleContains   string
+}
+
+const (
+	channelRecoveryRetryAfterKey          = "retry_after"
+	channelRecoveryRetryIntervalMinuteKey = "retry_interval_minutes"
+	channelRecoveryRetryRuleStatusCodeKey = "retry_rule_status_code"
+	channelRecoveryRetryRuleContainsKey   = "retry_rule_error_contains"
+)
 
 type ChannelSortOptions struct {
 	SortBy    string
@@ -324,6 +350,66 @@ func (channel *Channel) SetOtherInfo(otherInfo map[string]interface{}) {
 	channel.OtherInfo = string(otherInfoBytes)
 }
 
+// RecoveryRetryAfter returns the next eligible scheduled recovery test time.
+// A zero value means the global monitor cadence applies.
+func (channel *Channel) RecoveryRetryAfter() int64 {
+	value := channel.GetOtherInfo()[channelRecoveryRetryAfterKey]
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func (channel *Channel) IsRecoveryTestDue(now time.Time) bool {
+	retryAfter := channel.RecoveryRetryAfter()
+	return retryAfter <= 0 || now.Unix() >= retryAfter
+}
+
+func updateChannelRecoveryInfo(info map[string]interface{}, status int, options *ChannelStatusUpdateOptions) {
+	if status == common.ChannelStatusEnabled || options == nil || options.RetryAfter <= 0 {
+		delete(info, channelRecoveryRetryAfterKey)
+		delete(info, channelRecoveryRetryIntervalMinuteKey)
+		delete(info, channelRecoveryRetryRuleStatusCodeKey)
+		delete(info, channelRecoveryRetryRuleContainsKey)
+		return
+	}
+	info[channelRecoveryRetryAfterKey] = options.RetryAfter
+	info[channelRecoveryRetryIntervalMinuteKey] = options.RetryIntervalMinute
+	info[channelRecoveryRetryRuleStatusCodeKey] = options.RetryRuleStatusCode
+	if strings.TrimSpace(options.RetryRuleContains) == "" {
+		delete(info, channelRecoveryRetryRuleContainsKey)
+	} else {
+		info[channelRecoveryRetryRuleContainsKey] = options.RetryRuleContains
+	}
+}
+
+// UpdateChannelRecoveryRetryAfter updates only the persisted automatic-recovery
+// metadata for an already auto-disabled channel. A failed recovery probe uses
+// this to start the matching interval again without changing its status.
+func UpdateChannelRecoveryRetryAfter(channelId int, optionValues ...ChannelStatusUpdateOptions) error {
+	channel, err := GetChannelById(channelId, false)
+	if err != nil {
+		return err
+	}
+	info := channel.GetOtherInfo()
+	var options *ChannelStatusUpdateOptions
+	if len(optionValues) > 0 {
+		options = &optionValues[0]
+	}
+	updateChannelRecoveryInfo(info, common.ChannelStatusAutoDisabled, options)
+	channel.SetOtherInfo(info)
+	return DB.Model(&Channel{}).Where("id = ?", channelId).Update("other_info", channel.OtherInfo).Error
+}
+
 func (channel *Channel) GetTag() string {
 	if channel.Tag == nil {
 		return ""
@@ -363,6 +449,25 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOpti
 		err = order.Apply(DB).Limit(num).Offset(startIdx).Omit("key").Find(&channels).Error
 	}
 	return channels, err
+}
+
+// GetEarliestChannelRecoveryRetryAfter returns the first persisted custom
+// recovery deadline among auto-disabled channels. Reading the small
+// status/other_info projection keeps the task scheduler independent from a
+// database-specific JSON query implementation.
+func GetEarliestChannelRecoveryRetryAfter() (int64, error) {
+	channels := make([]*Channel, 0)
+	if err := DB.Select("id", "other_info").Where("status = ?", common.ChannelStatusAutoDisabled).Find(&channels).Error; err != nil {
+		return 0, err
+	}
+	var earliest int64
+	for _, channel := range channels {
+		retryAfter := channel.RecoveryRetryAfter()
+		if retryAfter > 0 && (earliest == 0 || retryAfter < earliest) {
+			earliest = retryAfter
+		}
+	}
+	return earliest, nil
 }
 
 func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
@@ -644,7 +749,7 @@ func CleanupChannelPollingLocks() {
 	})
 }
 
-func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason string) {
+func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason string, options *ChannelStatusUpdateOptions) {
 	keys := channel.GetKeys()
 	if len(keys) == 0 {
 		channel.Status = status
@@ -665,6 +770,7 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 			info := channel.GetOtherInfo()
 			info["status_reason"] = reason
 			info["status_time"] = common.GetTimestamp()
+			updateChannelRecoveryInfo(info, status, options)
 			channel.SetOtherInfo(info)
 			return
 		}
@@ -689,9 +795,13 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 			info := channel.GetOtherInfo()
 			info["status_reason"] = "All keys are disabled"
 			info["status_time"] = common.GetTimestamp()
+			updateChannelRecoveryInfo(info, status, options)
 			channel.SetOtherInfo(info)
 		} else if status == common.ChannelStatusEnabled {
 			channel.Status = common.ChannelStatusEnabled
+			info := channel.GetOtherInfo()
+			updateChannelRecoveryInfo(info, status, nil)
+			channel.SetOtherInfo(info)
 		}
 	}
 }
@@ -709,7 +819,11 @@ func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
 	return false
 }
 
-func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
+func UpdateChannelStatus(channelId int, usingKey string, status int, reason string, optionValues ...ChannelStatusUpdateOptions) bool {
+	var options *ChannelStatusUpdateOptions
+	if len(optionValues) > 0 {
+		options = &optionValues[0]
+	}
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
@@ -724,7 +838,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			pollingLock := GetChannelPollingLock(channelId)
 			pollingLock.Lock()
 			// 如果是多Key模式，更新缓存中的状态
-			handlerMultiKeyUpdate(channelCache, usingKey, status, reason)
+			handlerMultiKeyUpdate(channelCache, usingKey, status, reason, options)
 			pollingLock.Unlock()
 			if beforeStatus != channelCache.Status {
 				CacheUpdateChannelStatus(channelId, channelCache.Status)
@@ -762,7 +876,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			// Protect map writes with the same per-channel lock used by readers
 			pollingLock := GetChannelPollingLock(channelId)
 			pollingLock.Lock()
-			handlerMultiKeyUpdate(channel, usingKey, status, reason)
+			handlerMultiKeyUpdate(channel, usingKey, status, reason, options)
 			pollingLock.Unlock()
 			if beforeStatus != channel.Status {
 				shouldUpdateAbilities = true
@@ -771,6 +885,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			info := channel.GetOtherInfo()
 			info["status_reason"] = reason
 			info["status_time"] = common.GetTimestamp()
+			updateChannelRecoveryInfo(info, status, options)
 			channel.SetOtherInfo(info)
 			channel.Status = status
 			shouldUpdateAbilities = true
@@ -859,6 +974,9 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 }
 
 func UpdateChannelUsedQuota(id int, quota int) {
+	if err := RecordChannelDailyQuotaUsage(id, int64(quota)); err != nil {
+		common.SysLog(fmt.Sprintf("failed to record channel daily quota: channel_id=%d, delta_quota=%d, error=%v", id, quota, err))
+	}
 	if common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeChannelUsedQuota, id, quota)
 		return
@@ -962,6 +1080,23 @@ func (channel *Channel) ValidateSettings() error {
 		err := common.UnmarshalJsonStr(channel.OtherSettings, channelOtherSettings)
 		if err != nil {
 			return err
+		}
+	}
+	if channelOtherSettings.DailyQuotaLimit < 0 {
+		return fmt.Errorf("daily_quota_limit cannot be negative")
+	}
+	if channelOtherSettings.SamePriorityRetryRPMLimit < 0 || channelOtherSettings.SamePriorityRetryRPMLimit > 1_000_000 {
+		return fmt.Errorf("same_priority_retry_rpm_limit must be between 0 and 1000000")
+	}
+	for index, rule := range channelOtherSettings.ChannelRecoveryRetryRules {
+		if rule.StatusCode != 0 && (rule.StatusCode < 100 || rule.StatusCode > 599) {
+			return fmt.Errorf("channel_recovery_retry_rules[%d].status_code must be a valid HTTP status code", index)
+		}
+		if rule.RetryAfterMinutes <= 0 || rule.RetryAfterMinutes > dto.MaxChannelRecoveryRetryMinutes {
+			return fmt.Errorf("channel_recovery_retry_rules[%d].retry_after_minutes must be between 1 and %d", index, dto.MaxChannelRecoveryRetryMinutes)
+		}
+		if len(strings.TrimSpace(rule.ErrorContains)) > 512 {
+			return fmt.Errorf("channel_recovery_retry_rules[%d].error_contains must be at most 512 characters", index)
 		}
 	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom {

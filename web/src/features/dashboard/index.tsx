@@ -35,6 +35,7 @@ import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { ChannelDispatchDashboard } from './components/channels/channel-dispatch-dashboard'
 import { ModelsChartPreferences } from './components/models/models-chart-preferences'
 import { ModelsFilter } from './components/models/models-filter-dialog'
 import { OverviewDashboard } from './components/overview/overview-dashboard'
@@ -186,6 +187,9 @@ const SECTION_META: Record<DashboardSectionId, { titleKey: string }> = {
   flow: {
     titleKey: 'Flow',
   },
+  channels: {
+    titleKey: 'Channel Dispatch',
+  },
   users: {
     titleKey: 'User Analytics',
   },
@@ -248,7 +252,9 @@ export function Dashboard() {
   const visibleSections = useMemo(
     () =>
       DASHBOARD_SECTION_IDS.filter(
-        (section) => section !== 'overview' && (section !== 'users' || isAdmin)
+        (section) =>
+          section !== 'overview' &&
+          (!['channels', 'users'].includes(section) || isAdmin)
       ),
     [isAdmin]
   )
@@ -315,7 +321,18 @@ export function Dashboard() {
         />
       </>
     ) : null
-  const sectionActions = modelActions ?? flowActions
+  const channelActions =
+    activeSection === 'channels' ? (
+      <ModelsFilter
+        preferences={chartPreferences}
+        currentFilters={modelFilters}
+        onFilterChange={handleFilterChange}
+        onReset={handleResetFilters}
+        titleKey='Channel Dispatch Filters'
+        descriptionKey='Filter successful channel dispatches by time range and user.'
+      />
+    ) : null
+  const sectionActions = modelActions ?? flowActions ?? channelActions
 
   return (
     <SectionPageLayout>
@@ -408,6 +425,11 @@ export function Dashboard() {
                   sensitiveVisible={flowSensitiveVisible}
                 />
               </Suspense>
+            </FadeIn>
+          )}
+          {activeSection === 'channels' && isAdmin && (
+            <FadeIn>
+              <ChannelDispatchDashboard filters={modelFilters} />
             </FadeIn>
           )}
         </div>

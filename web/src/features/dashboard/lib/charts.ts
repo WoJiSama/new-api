@@ -20,6 +20,7 @@ import { dataScheme as vchartDefaultDataScheme } from '@visactor/vchart/esm/them
 
 import { MAX_CHART_TREND_POINTS } from '@/features/dashboard/constants'
 import type {
+  ConsumptionDistributionMetric,
   QuotaDataItem,
   ProcessedChartData,
   ProcessedUserChartData,
@@ -71,7 +72,8 @@ export function processChartData(
   data: QuotaDataItem[],
   timeGranularity: TimeGranularity = 'day',
   t?: TFunction,
-  chartCornerRadius?: number
+  chartCornerRadius?: number,
+  distributionMetric: ConsumptionDistributionMetric = 'quota'
 ): ProcessedChartData {
   const tt: TFunction = t ?? ((x) => x)
   const otherLabel = tt('Other')
@@ -80,6 +82,20 @@ export function processChartData(
     Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value)
   const formatQuotaValue = (value: number) => renderQuotaCompat(value, 4)
   const formatQuotaTotal = (value: number) => renderQuotaCompat(value, 2)
+  const formatTokens = (value: number) => formatInt(value)
+  const distributionValue = (quota: number, tokens: number) => {
+    if (distributionMetric === 'tokens') return tokens
+    return quota
+  }
+  const formatDistributionValue = (value: number) => {
+    if (distributionMetric === 'tokens') return formatTokens(value)
+    return formatQuotaValue(value)
+  }
+  const distributionUsage = (value: number) => {
+    if (distributionMetric === 'tokens') return value
+    if (value === 0) return 0
+    return Number((value / quotaPerUnit).toFixed(4))
+  }
 
   const MAX_TOOLTIP_MODELS = 15
   const isOtherTooltipKey = (key: string) =>
@@ -106,7 +122,7 @@ export function processChartData(
           sum =
             Number((array[i].datum as Record<string, unknown>)?.TimeSum) || sum
         }
-        array[i].value = formatQuotaValue(v)
+        array[i].value = formatDistributionValue(v)
       }
 
       if (collapseOverflow && array.length > MAX_TOOLTIP_MODELS) {
@@ -116,7 +132,7 @@ export function processChartData(
           ...otherItems,
         ].reduce((sum, item) => {
           const raw = item.datum
-            ? Number((item.datum as Record<string, unknown>)?.rawQuota) || 0
+            ? Number((item.datum as Record<string, unknown>)?.rawValue) || 0
             : 0
           return sum + raw
         }, 0)
@@ -124,7 +140,7 @@ export function processChartData(
           ...visible,
           {
             key: otherLabel,
-            value: formatQuotaValue(otherSum),
+            value: formatDistributionValue(otherSum),
             hasShape: true,
             shapeType: 'square',
             shapeFill: otherTooltipColor,
@@ -136,7 +152,7 @@ export function processChartData(
 
       array.unshift({
         key: tt('Total:'),
-        value: formatQuotaValue(sum),
+        value: formatDistributionValue(sum),
       })
       return array
     }
@@ -208,6 +224,7 @@ export function processChartData(
         },
       },
       totalQuotaDisplay: formatQuotaTotal(0),
+      totalTokensDisplay: formatTokens(0),
       totalCountDisplay: formatInt(0),
     }
   }
@@ -303,6 +320,10 @@ export function processChartData(
     (sum, x) => sum + (Number(x.quota) || 0),
     0
   )
+  const totalTokensRaw = Array.from(modelTotalsMap.values()).reduce(
+    (sum, x) => sum + (Number(x.tokens) || 0),
+    0
+  )
 
   // Pie chart (model call count proportion)
   const pieValues = Array.from(modelTotalsMap.entries())
@@ -316,7 +337,7 @@ export function processChartData(
   const lineValues: Array<{
     Time: string
     Model: string
-    rawQuota: number
+    rawValue: number
     Usage: number
     TimeSum: number
   }> = []
@@ -324,61 +345,66 @@ export function processChartData(
   chartTimes.forEach((time) => {
     let timeData = sortedModels.map((model) => {
       const stats = timeModelMap.get(time)?.get(model)
-      const rawQuota = Number(stats?.quota) || 0
-      const usd = rawQuota ? rawQuota / quotaPerUnit : 0
-      // Match legacy frontend getQuotaWithUnit(..., 4)
-      const usage = usd ? Number(usd.toFixed(4)) : 0
+      const quota = Number(stats?.quota) || 0
+      const tokens = Number(stats?.tokens) || 0
+      const rawValue = distributionValue(quota, tokens)
+      const usage = distributionUsage(rawValue)
       return {
         Time: time,
         Model: model,
-        rawQuota,
+        rawValue,
         Usage: usage,
         TimeSum: 0,
       }
     })
 
-    const timeSum = timeData.reduce((sum, item) => sum + item.rawQuota, 0)
-    timeData.sort((a, b) => b.rawQuota - a.rawQuota)
+    const timeSum = timeData.reduce((sum, item) => sum + item.rawValue, 0)
+    timeData.sort((a, b) => b.rawValue - a.rawValue)
     timeData = timeData.map((item) => ({ ...item, TimeSum: timeSum }))
     lineValues.push(...timeData)
   })
   lineValues.sort((a, b) => a.Time.localeCompare(b.Time))
 
-  // Area chart: top models by quota + "Other" bucket (too many series = unreadable)
+  // Area chart: top models by the selected metric + "Other" bucket.
   const MAX_AREA_MODELS = 15
-  const rankedQuotaModels = Array.from(modelTotalsMap.entries())
+  const rankedDistributionModels = Array.from(modelTotalsMap.entries())
     .map(([model, stats]) => ({
       Model: model,
-      Quota: Number(stats.quota) || 0,
+      Value: distributionValue(Number(stats.quota) || 0, Number(stats.tokens) || 0),
     }))
-    .sort((a, b) => b.Quota - a.Quota)
+    .sort((a, b) => b.Value - a.Value)
   const topAreaModels = new Set(
-    rankedQuotaModels.slice(0, MAX_AREA_MODELS).map((m) => m.Model)
+    rankedDistributionModels.slice(0, MAX_AREA_MODELS).map((m) => m.Model)
   )
 
   const areaValues: typeof lineValues = []
   chartTimes.forEach((time) => {
-    const buckets = new Map<string, { rawQuota: number; usage: number }>()
+    const buckets = new Map<string, { rawValue: number; usage: number }>()
     const modelMap = timeModelMap.get(time)
     let timeSum = 0
     sortedModels.forEach((model) => {
       const stats = modelMap?.get(model)
-      const rawQuota = Number(stats?.quota) || 0
-      const usd = rawQuota ? rawQuota / quotaPerUnit : 0
-      const usage = usd ? Number(usd.toFixed(4)) : 0
-      timeSum += rawQuota
+      const rawValue = distributionValue(
+        Number(stats?.quota) || 0,
+        Number(stats?.tokens) || 0
+      )
+      const usage = distributionUsage(rawValue)
+      timeSum += rawValue
       const key = topAreaModels.has(model) ? model : otherLabel
-      const prev = buckets.get(key) || { rawQuota: 0, usage: 0 }
+      const prev = buckets.get(key) || { rawValue: 0, usage: 0 }
       buckets.set(key, {
-        rawQuota: prev.rawQuota + rawQuota,
-        usage: Number((prev.usage + usage).toFixed(4)),
+        rawValue: prev.rawValue + rawValue,
+        usage:
+          distributionMetric === 'tokens'
+            ? prev.usage + usage
+            : Number((prev.usage + usage).toFixed(4)),
       })
     })
     for (const [model, vals] of buckets) {
       areaValues.push({
         Time: time,
         Model: model,
-        rawQuota: vals.rawQuota,
+        rawValue: vals.rawValue,
         Usage: vals.usage,
         TimeSum: timeSum,
       })
@@ -508,7 +534,7 @@ export function processChartData(
             {
               key: (datum: Record<string, unknown>) => datum?.Model,
               value: (datum: Record<string, unknown>) =>
-                formatQuotaValue(Number(datum?.rawQuota) || 0),
+                formatDistributionValue(Number(datum?.rawValue) || 0),
             },
           ],
         },
@@ -517,7 +543,7 @@ export function processChartData(
             {
               key: (datum: Record<string, unknown>) => datum?.Model,
               value: (datum: Record<string, unknown>) =>
-                Number(datum?.rawQuota) || 0,
+                Number(datum?.rawValue) || 0,
             },
           ],
           updateContent: makeTooltipDimensionUpdateContent(),
@@ -541,7 +567,7 @@ export function processChartData(
             {
               key: (datum: Record<string, unknown>) => datum?.Model,
               value: (datum: Record<string, unknown>) =>
-                formatQuotaValue(Number(datum?.rawQuota) || 0),
+                formatDistributionValue(Number(datum?.rawValue) || 0),
             },
           ],
         },
@@ -550,7 +576,7 @@ export function processChartData(
             {
               key: (datum: Record<string, unknown>) => datum?.Model,
               value: (datum: Record<string, unknown>) =>
-                Number(datum?.rawQuota) || 0,
+                Number(datum?.rawValue) || 0,
             },
           ],
           updateContent: makeTooltipDimensionUpdateContent({
@@ -684,6 +710,7 @@ export function processChartData(
       animation: true,
     },
     totalQuotaDisplay: formatQuotaTotal(totalQuotaRaw),
+    totalTokensDisplay: formatTokens(totalTokensRaw),
     totalCountDisplay: formatInt(totalTimes),
   }
 }
