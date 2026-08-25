@@ -557,7 +557,7 @@ function DailyQuotaCell({ channel }: { channel: Channel }) {
   const usedDisplay = formatQuotaWithCurrency(used, { abbreviate: true })
   const display = isLimited
     ? `${usedDisplay} / ${formatQuotaWithCurrency(limit, { abbreviate: true })}`
-    : usedDisplay
+    : `${t('Used:')} ${usedDisplay} · ${t('Unlimited')}`
 
   return (
     <TooltipProvider delay={100}>
@@ -1119,15 +1119,19 @@ export function useChannelsColumns(
 
       {
         accessorKey: 'current_rpm',
-        header: t('Current RPM'),
+        header: t("RPM (Current / Today's Peak)"),
         meta: { mobileHidden: true },
         cell: ({ row }) => {
           if (isTagAggregateRow(row.original)) {
             return <span className='text-muted-foreground text-xs'>-</span>
           }
-          return <span className='font-mono text-sm'>{row.original.current_rpm}</span>
+          return (
+            <span className='font-mono text-sm'>
+              {row.original.current_rpm} / {row.original.daily_peak_rpm}
+            </span>
+          )
         },
-        size: 100,
+        size: 150,
         enableSorting: false,
       },
 
@@ -1185,7 +1189,7 @@ export function useChannelsColumns(
       // Daily channel quota (used / configured limit)
       {
         accessorKey: 'daily_quota_used',
-        header: t('Daily Quota'),
+        header: t("Today's Quota"),
         meta: { mobileHidden: true },
         cell: ({ row }) => <DailyQuotaCell channel={row.original} />,
         size: 140,

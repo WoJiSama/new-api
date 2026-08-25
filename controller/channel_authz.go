@@ -93,6 +93,7 @@ var channelReadOnlyFields = map[string]struct{}{
 	"daily_quota_reserved": {},
 	"daily_quota_day":      {},
 	"current_rpm":          {},
+	"daily_peak_rpm":       {},
 }
 
 func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]any) {
@@ -128,6 +129,9 @@ func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]an
 	}
 	if _, ok := requestData["current_rpm"]; ok {
 		channel.CurrentRPM = 0
+	}
+	if _, ok := requestData["daily_peak_rpm"]; ok {
+		channel.DailyPeakRPM = 0
 	}
 }
 

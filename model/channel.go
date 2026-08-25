@@ -63,6 +63,7 @@ type Channel struct {
 	DailyQuotaReserved int64  `json:"daily_quota_reserved" gorm:"-"`
 	DailyQuotaDay      string `json:"daily_quota_day" gorm:"-"`
 	CurrentRPM         int64  `json:"current_rpm" gorm:"-"`
+	DailyPeakRPM       int64  `json:"daily_peak_rpm" gorm:"-"`
 
 	// cache info
 	Keys []string `json:"-" gorm:"-"`

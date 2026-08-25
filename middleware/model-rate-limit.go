@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/common/limiter"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
 
@@ -95,18 +94,13 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 			return
 		}
 
-		//2.检查总请求数限制并记录总请求（当totalMaxCount为0时会自动跳过，使用令牌桶限流器
+		// 2. Check the total request limit, including failed requests. This uses
+		// the shared fixed-window limiter so the configured value means exactly
+		// "requests per period" rather than a token-bucket refill rate.
 		if totalMaxCount > 0 {
-			totalKey := fmt.Sprintf("rateLimit:%s", userId)
-			// 初始化
-			tb := limiter.New(ctx, rdb)
-			allowed, err = tb.Allow(
-				ctx,
-				totalKey,
-				limiter.WithCapacity(int64(totalMaxCount)*duration),
-				limiter.WithRate(int64(totalMaxCount)),
-				limiter.WithRequested(duration),
-			)
+			totalKey := redisUserRateLimitKey(ModelRequestRateLimitCountMark, c.GetInt("id"))
+			var ttlSeconds int64
+			allowed, _, ttlSeconds, err = redisFixedWindowTake(ctx, totalKey, totalMaxCount, duration)
 
 			if err != nil {
 				fmt.Println("检查总请求数限制失败:", err.Error())
@@ -115,7 +109,11 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 			}
 
 			if !allowed {
+				if ttlSeconds > 0 {
+					c.Header("Retry-After", strconv.FormatInt(ttlSeconds, 10))
+				}
 				abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", setting.ModelRequestRateLimitDurationMinutes, totalMaxCount))
+				return
 			}
 		}
 

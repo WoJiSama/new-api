@@ -36,25 +36,7 @@ func (channelTestHandler) Enabled() bool {
 }
 
 func (channelTestHandler) Interval() time.Duration {
-	globalInterval := channelTestGlobalInterval()
-	interval := globalInterval
-
-	// Keep regular scheduled-all tests at their configured global cadence even
-	// when shorter recovery rules insert recovery-only task runs in between.
-	if lastFullAt, err := latestFullChannelTestAt(); err == nil && lastFullAt > 0 {
-		untilFull := time.Until(time.Unix(lastFullAt, 0).Add(globalInterval))
-		interval = minChannelTestInterval(interval, untilFull)
-	}
-	// A matching channel rule is persisted as retry_after when it is disabled.
-	// Waking at the earliest deadline allows a shorter per-channel interval
-	// without testing healthy channels more frequently.
-	if retryAfter, err := model.GetEarliestChannelRecoveryRetryAfter(); err == nil && retryAfter > 0 {
-		interval = minChannelTestInterval(interval, time.Until(time.Unix(retryAfter, 0)))
-	}
-	if interval < time.Second {
-		return time.Second
-	}
-	return interval
+	return channelTestGlobalInterval()
 }
 
 func (channelTestHandler) NewPayload() any {
@@ -73,14 +55,27 @@ func channelTestGlobalInterval() time.Duration {
 	return time.Duration(minutes * float64(time.Minute))
 }
 
-func minChannelTestInterval(current, candidate time.Duration) time.Duration {
-	if candidate <= 0 || candidate < time.Second {
-		return time.Second
+func (channelTestHandler) ShouldSchedule(now int64, _ *model.SystemTask) (any, bool) {
+	lastFullAt, err := latestFullChannelTestAt()
+	if err != nil {
+		return nil, false
 	}
-	if candidate < current {
-		return candidate
+	globalInterval := channelTestGlobalInterval()
+	retryAfter, err := model.GetEarliestChannelRecoveryRetryAfter()
+	if err != nil {
+		return nil, false
 	}
-	return current
+	return channelTestScheduleDecision(now, lastFullAt, retryAfter, globalInterval)
+}
+
+func channelTestScheduleDecision(now, lastFullAt, retryAfter int64, globalInterval time.Duration) (any, bool) {
+	if lastFullAt <= 0 || now-lastFullAt >= int64(globalInterval.Seconds()) {
+		return nil, true
+	}
+	if retryAfter > 0 && retryAfter <= now {
+		return channelTestTaskPayload{RecoveryOnly: true}, true
+	}
+	return nil, false
 }
 
 func latestFullChannelTestAt() (int64, error) {

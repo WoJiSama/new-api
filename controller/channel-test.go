@@ -886,6 +886,7 @@ func TestChannel(c *gin.Context) {
 		requestCtx = c.Request.Context()
 	}
 	result := testChannel(requestCtx, channel, testUserID, testModel, endpointType, isStream)
+	disableFailedManualChannelTest(channel, result)
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
@@ -916,6 +917,32 @@ func TestChannel(c *gin.Context) {
 		"message": "",
 		"time":    consumedTime,
 	})
+}
+
+// disableFailedManualChannelTest makes the explicit single-channel test action
+// fail closed: an enabled channel that opted into auto-ban is disabled as soon
+// as its connection test produces an upstream or local request error. This is
+// intentionally independent of the global automatic-disable switch because the
+// admin explicitly requested the test and the disable action.
+func disableFailedManualChannelTest(channel *model.Channel, result testResult) {
+	if channel == nil || channel.Status != common.ChannelStatusEnabled || !channel.GetAutoBan() {
+		return
+	}
+
+	failure := result.newAPIError
+	if failure == nil && result.localErr != nil {
+		failure = types.NewError(result.localErr, types.ErrorCodeDoRequestFailed)
+	}
+	if failure == nil {
+		return
+	}
+
+	usingKey := common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+	service.DisableChannel(
+		*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()),
+		failure.ErrorWithStatusCode(),
+		failure,
+	)
 }
 
 // channelTestSummary records the outcome of one channel test cycle so the

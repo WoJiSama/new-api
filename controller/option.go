@@ -308,6 +308,14 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "RelayFailureRateLimitCount", "RelayFailureRateLimitDurationSeconds":
+		if !isPositiveOptionValue(option.Value.(string)) {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "relay failure rate limit must be at least 1",
+			})
+			return
+		}
 	case "AutomaticDisableStatusCodes":
 		_, err = operation_setting.ParseHTTPStatusCodeRanges(option.Value.(string))
 		if err != nil {

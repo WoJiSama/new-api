@@ -37,6 +37,10 @@ const SECURITY_SECTIONS = [
           ModelRequestRateLimitDurationMinutes:
             settings.ModelRequestRateLimitDurationMinutes,
           ModelRequestRateLimitGroup: settings.ModelRequestRateLimitGroup,
+          RelayFailureRateLimitEnabled: settings.RelayFailureRateLimitEnabled,
+          RelayFailureRateLimitCount: settings.RelayFailureRateLimitCount,
+          RelayFailureRateLimitDurationSeconds:
+            settings.RelayFailureRateLimitDurationSeconds,
         }}
       />
     ),

@@ -204,6 +204,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				newAPIError = channelErr
 				break
 			}
+			if service.IsChannelFailureCircuitOpen(c.Request.Context(), channel.Id) {
+				retryParam.ExcludeChannel(channel)
+				continue
+			}
 			if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 				newAPIError = billingErr
 				break
@@ -214,6 +218,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				break
 			}
 			if !reserved {
+				if fixedChannelError := fixedChannelDailyQuotaExhaustionError(relayInfo, channel); fixedChannelError != nil {
+					newAPIError = fixedChannelError
+					break
+				}
 				retryParam.ExcludeChannel(channel)
 				continue
 			}
@@ -272,6 +280,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 		service.ReleaseChannelDailyQuotaForAttempt(relayInfo)
 
+		service.OpenChannelFailureCircuit(c.Request.Context(), channel.Id, newAPIError)
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
@@ -289,6 +298,18 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
 		})
 	}
+}
+
+func fixedChannelDailyQuotaExhaustionError(relayInfo *relaycommon.RelayInfo, channel *model.Channel) *types.NewAPIError {
+	if relayInfo == nil || relayInfo.ChannelMeta != nil || channel == nil {
+		return nil
+	}
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("渠道 #%d 今日额度不足", channel.Id),
+		types.ErrorCodeGetChannelFailed,
+		http.StatusServiceUnavailable,
+		types.ErrOptionWithSkipRetry(),
+	)
 }
 
 var upgrader = websocket.Upgrader{

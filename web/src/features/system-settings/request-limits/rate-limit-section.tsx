@@ -72,6 +72,9 @@ const createRateLimitSchema = (t: (key: string) => string) =>
     ModelRequestRateLimitDurationMinutes: z.number().min(0),
     ModelRequestRateLimitCount: z.number().min(0).max(100000000),
     ModelRequestRateLimitSuccessCount: z.number().min(1).max(100000000),
+    RelayFailureRateLimitEnabled: z.boolean(),
+    RelayFailureRateLimitCount: z.number().min(1).max(100000000),
+    RelayFailureRateLimitDurationSeconds: z.number().min(1).max(86400),
     ModelRequestRateLimitGroup: z
       .string()
       .optional()
@@ -161,7 +164,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -192,7 +195,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -223,7 +226,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1)
+                          field.onChange(Number.parseInt(e.target.value) || 1)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -233,6 +236,87 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                   </FormControl>
                   <FormDescription>
                     {t('Only successful requests')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <SettingsSwitchItem>
+            <SettingsSwitchContent>
+              <FormLabel>{t('Protect unavailable upstreams')}</FormLabel>
+              <FormDescription>
+                {t(
+                  'Temporarily rejects a token after repeated upstream failures, preventing immediate retry storms.'
+                )}
+              </FormDescription>
+            </SettingsSwitchContent>
+            <FormControl>
+              <Switch
+                checked={form.watch('RelayFailureRateLimitEnabled')}
+                onCheckedChange={(checked) =>
+                  form.setValue('RelayFailureRateLimitEnabled', checked, {
+                    shouldDirty: true,
+                    shouldValidate: true,
+                  })
+                }
+              />
+            </FormControl>
+          </SettingsSwitchItem>
+
+          <div className='grid gap-4 md:grid-cols-2'>
+            <FormField
+              control={form.control}
+              name='RelayFailureRateLimitCount'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Max unavailable responses')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={1}
+                      max={100000000}
+                      step={1}
+                      {...field}
+                      onChange={(e) =>
+                        field.onChange(Number.parseInt(e.target.value) || 1)
+                      }
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('5xx responses allowed per token before cooldown')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='RelayFailureRateLimitDurationSeconds'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Unavailable response window')}</FormLabel>
+                  <FormControl>
+                    <div className='flex items-center gap-2'>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={86400}
+                        step={1}
+                        {...field}
+                        onChange={(e) =>
+                          field.onChange(Number.parseInt(e.target.value) || 1)
+                        }
+                      />
+                      <span className='text-muted-foreground text-sm'>
+                        {t('seconds')}
+                      </span>
+                    </div>
+                  </FormControl>
+                  <FormDescription>
+                    {t('Cooldown duration returned in Retry-After')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

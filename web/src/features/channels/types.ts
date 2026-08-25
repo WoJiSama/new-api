@@ -76,6 +76,7 @@ export const channelSchema = z.object({
   daily_quota_reserved: z.number().default(0),
   daily_quota_day: z.string().default(''),
   current_rpm: z.number().default(0),
+  daily_peak_rpm: z.number().default(0),
 })
 
 export type Channel = z.infer<typeof channelSchema>

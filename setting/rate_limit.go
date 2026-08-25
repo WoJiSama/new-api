@@ -16,6 +16,12 @@ var ModelRequestRateLimitSuccessCount = 1000
 var ModelRequestRateLimitGroup = map[string][2]int{}
 var ModelRequestRateLimitMutex sync.RWMutex
 
+// Relay failure limiting protects channels and the API process from clients
+// that immediately retry an unavailable upstream response.
+var RelayFailureRateLimitEnabled = true
+var RelayFailureRateLimitCount = 3
+var RelayFailureRateLimitDurationSeconds = 60
+
 func ModelRequestRateLimitGroup2JSONString() string {
 	ModelRequestRateLimitMutex.RLock()
 	defer ModelRequestRateLimitMutex.RUnlock()

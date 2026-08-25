@@ -46,6 +46,12 @@ type ScheduledSystemTaskHandler interface {
 	NewPayload() any
 }
 
+// ScheduledSystemTaskDecisionHandler lets a handler use an absolute deadline
+// when the generic "time since latest task" rule is not sufficient.
+type ScheduledSystemTaskDecisionHandler interface {
+	ShouldSchedule(now int64, latest *model.SystemTask) (payload any, due bool)
+}
+
 var (
 	systemTaskHandlersMu sync.RWMutex
 	systemTaskHandlers   = map[string]SystemTaskHandler{}
@@ -283,6 +289,20 @@ func runSystemTaskScheduler() {
 		if latest != nil {
 			if latest.Status == model.SystemTaskStatusPending || latest.Status == model.SystemTaskStatusRunning {
 				continue // an active row already exists
+			}
+			if decisionHandler, ok := scheduled.(ScheduledSystemTaskDecisionHandler); ok {
+				payload, due := decisionHandler.ShouldSchedule(now, latest)
+				if !due {
+					continue
+				}
+				if _, err := model.CreateSystemTask(scheduled.Type(), payload, nil); err != nil {
+					activeTask, activeErr := model.GetActiveSystemTask(scheduled.Type())
+					if activeErr == nil && activeTask != nil {
+						continue
+					}
+					logger.LogWarn(context.Background(), fmt.Sprintf("system task scheduler create failed: type=%s err=%v", scheduled.Type(), err))
+				}
+				continue
 			}
 			if now-latest.UpdatedAt < int64(scheduled.Interval().Seconds()) {
 				continue // not due yet
