@@ -58,6 +58,22 @@ func TestDisableFailedManualChannelTestBuildsFailureForLocalError(t *testing.T) 
 	assert.NotPanics(t, func() { disableFailedManualChannelTest(channel, result) })
 }
 
+func TestDisableFailedManualChannelTestHandlesMissingContext(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	channel := &model.Channel{
+		Name:    "missing context channel",
+		Type:    constant.ChannelTypeOpenAI,
+		Status:  common.ChannelStatusEnabled,
+		AutoBan: common.GetPointer(1),
+	}
+	assert.NoError(t, db.Create(channel).Error)
+	assert.NoError(t, db.AutoMigrate(&model.Ability{}))
+
+	assert.NotPanics(t, func() {
+		disableFailedManualChannelTest(channel, testResult{localErr: errors.New("unsupported test channel")})
+	})
+}
+
 func TestDisableFailedManualChannelTestPersistsAutoDisabledStatus(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	channel := &model.Channel{

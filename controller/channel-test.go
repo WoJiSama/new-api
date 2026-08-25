@@ -937,7 +937,10 @@ func disableFailedManualChannelTest(channel *model.Channel, result testResult) {
 		return
 	}
 
-	usingKey := common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+	usingKey := ""
+	if result.context != nil {
+		usingKey = common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+	}
 	service.DisableChannel(
 		*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()),
 		failure.ErrorWithStatusCode(),
