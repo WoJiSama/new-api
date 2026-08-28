@@ -44,9 +44,6 @@ type testResult struct {
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
-	if normalized != "" {
-		return normalized
-	}
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
@@ -64,6 +61,14 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 		strings.Contains(modelLower, "codex") ||
 		strings.HasPrefix(modelLower, "gpt-5.6-") ||
 		strings.HasSuffix(baseURL, "/codex") {
+		if normalized == "" || normalized == string(constant.EndpointTypeOpenAI) {
+			return string(constant.EndpointTypeOpenAIResponse)
+		}
+	}
+	if normalized != "" {
+		return normalized
+	}
+	if channel != nil && channel.Type == constant.ChannelTypeCodex {
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
 	return normalized
