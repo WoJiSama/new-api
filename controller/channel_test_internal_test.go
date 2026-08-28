@@ -117,6 +117,15 @@ func TestResponsesCompactAPITypeSupport(t *testing.T) {
 	}
 }
 
+func TestNormalizeChannelTestEndpointUsesResponsesForCodexCompatibleModels(t *testing.T) {
+	baseURL := "https://api.krill-ai.net/codex"
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &baseURL}
+
+	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(channel, "gpt-5.6-sol", ""))
+	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(channel, "gpt-5.5", ""))
+	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(&model.Channel{Type: constant.ChannelTypeCodex}, "gpt-4o", ""))
+}
+
 func TestMultiprotocolGatewayEndpointTypes(t *testing.T) {
 	want := []constant.EndpointType{
 		constant.EndpointTypeOpenAI,

@@ -50,7 +50,20 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
-	if channel != nil && channel.Type == constant.ChannelTypeCodex {
+	// Codex-compatible gateways expose the Responses API even when they are
+	// stored as a generic OpenAI channel (for example, a base URL ending in
+	// /codex).  The gpt-5.6 family is also served through Responses by these
+	// gateways.  Select the endpoint before building the test request so both
+	// the wire path and request payload use the Responses protocol.
+	modelLower := strings.ToLower(strings.TrimSpace(modelName))
+	baseURL := ""
+	if channel != nil && channel.BaseURL != nil {
+		baseURL = strings.ToLower(strings.TrimRight(strings.TrimSpace(*channel.BaseURL), "/"))
+	}
+	if channel != nil && channel.Type == constant.ChannelTypeCodex ||
+		strings.Contains(modelLower, "codex") ||
+		strings.HasPrefix(modelLower, "gpt-5.6-") ||
+		strings.HasSuffix(baseURL, "/codex") {
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
 	return normalized
