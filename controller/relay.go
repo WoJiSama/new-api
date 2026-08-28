@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -393,7 +395,7 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if openaiErr == nil {
 		return false
 	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) && !clearAffinityOnTransientUpstreamFailure(c, openaiErr) {
 		return false
 	}
 	if types.IsChannelError(openaiErr) {
@@ -419,6 +421,37 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	return operation_setting.ShouldRetryByStatusCode(code)
+}
+
+// clearAffinityOnTransientUpstreamFailure releases a session's sticky channel
+// only for failures that indicate the upstream is temporarily unavailable.
+// Ordinary client/provider errors keep the affinity contract intact.
+func clearAffinityOnTransientUpstreamFailure(c *gin.Context, err *types.NewAPIError) bool {
+	if c == nil || err == nil || !isTransientUpstreamFailure(err) {
+		return false
+	}
+	cleared := service.ClearCurrentChannelAffinityCache(c)
+	if !service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		logger.LogInfo(c, fmt.Sprintf("channel affinity cleared after transient upstream failure: status_code=%d", err.StatusCode))
+		return true
+	}
+	return cleared
+}
+
+func isTransientUpstreamFailure(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	if err.StatusCode == http.StatusBadGateway ||
+		err.StatusCode == http.StatusServiceUnavailable ||
+		err.StatusCode == http.StatusGatewayTimeout {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
