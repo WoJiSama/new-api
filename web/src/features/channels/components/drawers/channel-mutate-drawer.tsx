@@ -287,6 +287,7 @@ const SENSITIVE_FORM_FIELDS = [
   'http_protocol',
   'http2_connection_shards',
   'pass_through_body_enabled',
+  'responses_to_chat_completions',
   'system_prompt',
   'system_prompt_override',
   'allow_service_tier',
@@ -341,6 +342,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.force_format ||
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
+    values.responses_to_chat_completions ||
     values.system_prompt_override ||
     (values.http_protocol && values.http_protocol !== 'auto') ||
     (values.http2_connection_shards != null &&
@@ -4327,6 +4329,27 @@ export function ChannelMutateDrawer({
                                         {t(
                                           'Pass request body directly to upstream'
                                         )}
+                                      </FormDescription>
+                                    </div>
+                                    <FormControl>
+                                      <Switch
+                                        checked={field.value}
+                                        onCheckedChange={field.onChange}
+                                      />
+                                    </FormControl>
+                                  </FormItem>
+                                )}
+                              />
+
+                              <FormField
+                                control={form.control}
+                                name='responses_to_chat_completions'
+                                render={({ field }) => (
+                                  <FormItem className='flex items-center justify-between px-4 py-3'>
+                                    <div className='space-y-0.5'>
+                                      <FormLabel>Responses 转 Chat</FormLabel>
+                                      <FormDescription>
+                                        {t('Keep /v1/responses for clients, but send /v1/chat/completions upstream')}
                                       </FormDescription>
                                     </div>
                                     <FormControl>
