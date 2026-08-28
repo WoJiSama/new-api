@@ -37,6 +37,9 @@ func responsesViaChatCompletions(c *gin.Context, info *relaycommon.RelayInfo, ad
 	info.RelayMode = relayconstant.RelayModeChatCompletions
 	info.RequestURLPath = "/v1/chat/completions"
 	info.RelayFormat = types.RelayFormatOpenAI
+	// This header is specific to the native Codex Responses endpoint. It must
+	// not be forwarded when the request is converted to Chat Completions.
+	c.Set("responses_to_chat_completions", true)
 	converted, err := adaptor.ConvertOpenAIRequest(c, info, chatRequest)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())

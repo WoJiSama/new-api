@@ -290,6 +290,10 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 
 		headerOverride[key] = value
 	}
+	if c != nil && c.GetBool("responses_to_chat_completions") {
+		// Codex Responses-Lite metadata is invalid on the Chat Completions API.
+		delete(headerOverride, "x-openai-internal-codex-responses-lite")
+	}
 	return headerOverride, nil
 }
 
