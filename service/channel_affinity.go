@@ -334,8 +334,8 @@ func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAf
 	}
 }
 
-func buildChannelAffinityCacheKeySuffix(rule operation_setting.ChannelAffinityRule, modelName string, usingGroup string, affinityValue string) string {
-	parts := make([]string, 0, 4)
+func buildChannelAffinityCacheKeySuffix(rule operation_setting.ChannelAffinityRule, modelName string, usingGroup string, affinityValue string, requestPath ...string) string {
+	parts := make([]string, 0, 5)
 	if rule.IncludeRuleName && rule.Name != "" {
 		parts = append(parts, rule.Name)
 	}
@@ -344,6 +344,13 @@ func buildChannelAffinityCacheKeySuffix(rule operation_setting.ChannelAffinityRu
 	}
 	if rule.IncludeUsingGroup && usingGroup != "" {
 		parts = append(parts, usingGroup)
+	}
+	// Never share a sticky entry between Chat Completions and Responses. A
+	// conversation may use different payload shapes (especially tool calls),
+	// so protocol is part of the affinity identity even when rule flags omit
+	// model/group details.
+	if len(requestPath) > 0 && requestPath[0] != "" {
+		parts = append(parts, requestPath[0])
 	}
 	parts = append(parts, affinityValue)
 	return strings.Join(parts, ":")
@@ -591,7 +598,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		if ttlSeconds <= 0 {
 			ttlSeconds = setting.DefaultTTLSeconds
 		}
-		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
+		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue, path)
 		cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
 		setChannelAffinityContext(c, channelAffinityMeta{
 			CacheKey:       cacheKeyFull,
@@ -617,6 +624,17 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		}
 		if found {
 			return channelID, true
+		}
+		// Read legacy pre-protocol keys during the migration window. New writes
+		// always include requestPath, so Chat and Responses entries no longer
+		// collide while existing sticky sessions continue to work.
+		if path != "" {
+			legacySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
+			if legacySuffix != cacheKeySuffix {
+				if legacyID, legacyFound, legacyErr := cache.Get(legacySuffix); legacyErr == nil && legacyFound {
+					return legacyID, true
+				}
+			}
 		}
 		return 0, false
 	}

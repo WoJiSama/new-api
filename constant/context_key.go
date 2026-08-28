@@ -67,6 +67,10 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+	// ContextKeyProtocolSensitiveConversation marks requests that contain tools
+	// or tool-call history. Such conversations must stay on native protocol
+	// channels and must not be converted between Responses and Chat.
+	ContextKeyProtocolSensitiveConversation ContextKey = "protocol_sensitive_conversation"
 
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit

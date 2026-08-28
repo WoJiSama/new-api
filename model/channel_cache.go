@@ -116,6 +116,7 @@ type ChannelSelectionOptions struct {
 	RequestPath        string
 	PreviousPriority   *int64
 	ExcludedChannelIDs map[int]struct{}
+	ProtocolSensitive  bool // tool-call conversation; disallow protocol conversion
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
@@ -133,12 +134,12 @@ func GetRandomSatisfiedChannelWithOptions(group string, model string, options Ch
 
 	channelSyncLock.RLock()
 	// First, try to find channels with the exact model name.
-	channelIDs := filterChannelsByRequestPathAndModel(group2model2channels[group][model], options.RequestPath, model)
+	channelIDs := filterChannelsByRequestPathAndModel(group2model2channels[group][model], options.RequestPath, model, options.ProtocolSensitive)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channelIDs) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channelIDs = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], options.RequestPath, model)
+		channelIDs = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], options.RequestPath, model, options.ProtocolSensitive)
 	}
 
 	if len(channelIDs) == 0 {
@@ -276,11 +277,14 @@ func chooseWeightedChannel(channels []*Channel) (*Channel, error) {
 // only when one of their configured routes matches requestPath and model. All
 // other channel types always pass. When requestPath is empty, filtering is skipped.
 // Caller must hold channelSyncLock (read lock). The cached slice is never mutated.
-func filterChannelsByRequestPathAndModel(channels []int, requestPath string, model string) []int {
+func filterChannelsByRequestPathAndModel(channels []int, requestPath string, model string, protocolSensitive ...bool) []int {
 	if requestPath == "" || len(channels) == 0 {
 		return channels
 	}
 	filtered := make([]int, 0, len(channels))
+	preferNativeResponses := strings.HasPrefix(requestPath, "/v1/responses")
+	sensitive := len(protocolSensitive) > 0 && protocolSensitive[0]
+	nativeResponses := make([]int, 0, len(channels))
 	for _, channelId := range channels {
 		channel, ok := channelsIDM[channelId]
 		if !ok {
@@ -289,12 +293,28 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 			continue
 		}
 		if channel.Type != constant.ChannelTypeAdvancedCustom {
-			filtered = append(filtered, channelId)
+			if channel.Type == constant.ChannelTypeCodex && strings.HasPrefix(requestPath, "/v1/chat/completions") {
+				continue
+			}
+			if preferNativeResponses && !channel.GetSetting().ResponsesToChatCompletions {
+				nativeResponses = append(nativeResponses, channelId)
+			} else if !sensitive || !channel.GetSetting().ResponsesToChatCompletions {
+				filtered = append(filtered, channelId)
+			}
 			continue
 		}
 		if config := channel2advancedCustomConfig[channelId]; config != nil && config.SupportsPathForModel(requestPath, model) {
+			if sensitive {
+				route, ok := config.MatchPathForModel(requestPath, model)
+				if ok && route.Converter == "openai_responses_to_openai_chat_completions" {
+					continue
+				}
+			}
 			filtered = append(filtered, channelId)
 		}
+	}
+	if preferNativeResponses && len(nativeResponses) > 0 {
+		return nativeResponses
 	}
 	return filtered
 }

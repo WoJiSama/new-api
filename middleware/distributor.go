@@ -106,7 +106,8 @@ func Distribute() func(c *gin.Context) {
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) &&
+						channelSupportsProtocolSensitiveConversation(c, preferred, c.Request.URL.Path, modelRequest.Model) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetRequestAutoGroups(c, userGroup)
@@ -178,10 +179,30 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string, requ
 		return false
 	}
 	if channel.Type != constant.ChannelTypeAdvancedCustom {
+		// Native Codex channels only serve the Responses protocol. Prevent a
+		// Chat Completions request from reusing a Responses-only sticky entry.
+		if channel.Type == constant.ChannelTypeCodex {
+			return strings.HasPrefix(requestPath, "/v1/responses")
+		}
 		return true
 	}
 	config := channel.GetOtherSettings().AdvancedCustom
 	return config != nil && config.SupportsPathForModel(requestPath, requestModel)
+}
+
+func channelSupportsProtocolSensitiveConversation(c *gin.Context, channel *model.Channel, requestPath string, requestModel string) bool {
+	if c == nil || !common.GetContextKeyBool(c, constant.ContextKeyProtocolSensitiveConversation) || channel == nil {
+		return true
+	}
+	if strings.HasPrefix(requestPath, "/v1/responses") && channel.GetSetting().ResponsesToChatCompletions {
+		return false
+	}
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		if route, ok := channel.GetOtherSettings().AdvancedCustom.MatchPathForModel(requestPath, requestModel); ok && route.Converter == "openai_responses_to_openai_chat_completions" {
+			return false
+		}
+	}
+	return true
 }
 
 // getModelFromRequest 从请求中读取模型信息
@@ -217,6 +238,24 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 	}
 	if !gjson.ValidBytes(requestBody) {
 		return nil, errors.New("invalid JSON request body")
+	}
+	// Tool definitions and tool-call history make the conversation protocol
+	// sensitive: converting Responses to Chat (or vice versa) can lose call
+	// identifiers and produce "No tool output found" upstream errors.
+	sensitive := gjson.GetBytes(requestBody, "tools.#").Int() > 0 ||
+		gjson.GetBytes(requestBody, "input.#(type==function_call)").Exists() ||
+		gjson.GetBytes(requestBody, "input.#(type==function_call_output)").Exists()
+	if !sensitive {
+		gjson.GetBytes(requestBody, "messages").ForEach(func(_, message gjson.Result) bool {
+			if message.Get("role").String() == "tool" || message.Get("tool_calls.#").Int() > 0 {
+				sensitive = true
+				return false
+			}
+			return true
+		})
+	}
+	if sensitive {
+		common.SetContextKey(c, constant.ContextKeyProtocolSensitiveConversation, true)
 	}
 
 	values := gjson.GetManyBytes(requestBody, "model", "group")

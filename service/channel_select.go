@@ -53,6 +53,7 @@ func (p *RetryParam) selectionOptions() model.ChannelSelectionOptions {
 		RequestPath:        p.RequestPath,
 		PreviousPriority:   p.previousPriority,
 		ExcludedChannelIDs: p.excludedChannelIDs,
+		ProtocolSensitive:  p.Ctx != nil && common.GetContextKeyBool(p.Ctx, constant.ContextKeyProtocolSensitiveConversation),
 	}
 }
 

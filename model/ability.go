@@ -121,7 +121,7 @@ func GetChannelWithOptions(group string, model string, options ChannelSelectionO
 	if err != nil {
 		return nil, err
 	}
-	abilities = filterAbilitiesByRequestPathAndModel(abilities, options.RequestPath, model)
+	abilities = filterAbilitiesByRequestPathAndModel(abilities, options.RequestPath, model, options.ProtocolSensitive)
 	abilities, err = filterAbilitiesByDailyQuota(abilities)
 	if err != nil {
 		return nil, err
@@ -180,7 +180,7 @@ func filterAbilitiesByDailyQuota(abilities []Ability) ([]Ability, error) {
 // (type 58) channels are path-checked: kept only when one of their routes matches
 // requestPath and model; all other channel types always pass. When requestPath is
 // empty, filtering is skipped.
-func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath string, model string) []Ability {
+func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath string, model string, protocolSensitive ...bool) []Ability {
 	if requestPath == "" || len(abilities) == 0 {
 		return abilities
 	}
@@ -202,16 +202,34 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 	}
 
 	advancedConfigs := make(map[int]*dto.AdvancedCustomConfig)
+	channelTypes := make(map[int]int, len(channels))
 	for _, channel := range channels {
+		channelTypes[channel.Id] = channel.Type
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
 			advancedConfigs[channel.Id] = channel.GetOtherSettings().AdvancedCustom
 		}
 	}
 
 	filtered := make([]Ability, 0, len(abilities))
+	sensitive := len(protocolSensitive) > 0 && protocolSensitive[0]
 	for _, ability := range abilities {
 		config, isAdvancedCustom := advancedConfigs[ability.ChannelId]
 		if !isAdvancedCustom {
+			if channelTypes[ability.ChannelId] == constant.ChannelTypeCodex && strings.HasPrefix(requestPath, "/v1/chat/completions") {
+				continue
+			}
+			if sensitive && strings.HasPrefix(requestPath, "/v1/responses") {
+				conversion := false
+				for _, channel := range channels {
+					if channel.Id == ability.ChannelId && channel.GetSetting().ResponsesToChatCompletions {
+						conversion = true
+						break
+					}
+				}
+				if conversion {
+					continue
+				}
+			}
 			filtered = append(filtered, ability)
 			continue
 		}
