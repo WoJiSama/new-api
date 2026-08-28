@@ -108,6 +108,36 @@ func TestRelayErrorHandlerKeepsStructuredErrorMessage(t *testing.T) {
 	require.Equal(t, message, newAPIError.Error())
 }
 
+func TestRelayErrorHandlerLogsStructuredUpstreamBody(t *testing.T) {
+	withDebugEnabled(t, false)
+	var logBuffer bytes.Buffer
+
+	common.LogWriterMu.Lock()
+	oldWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &logBuffer
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultErrorWriter = oldWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	resp := &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"upstream overloaded","type":"upstream_error"}}`)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, "upstream overloaded", newAPIError.Error())
+	require.Contains(t, logBuffer.String(), "upstream response diagnostic")
+	require.Contains(t, logBuffer.String(), "status_code=503")
+	require.Contains(t, logBuffer.String(), "upstream overloaded")
+	require.Contains(t, logBuffer.String(), "application/json")
+}
+
 func TestRelayErrorHandlerKeepsOpenAIErrorMessage(t *testing.T) {
 	message := strings.Repeat("d", common.LocalLogContentLimit+256)
 	body := `{"error":{"message":"` + message + `","type":"server_error","code":"server_error"}}`

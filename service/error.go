@@ -94,7 +94,13 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	CloseResponseBodyGracefully(resp)
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := string(responseBody)
-	responseBodyPreview := common.LocalLogPreview(responseBodyText)
+	// Keep the user-facing error concise, but always leave an actionable,
+	// bounded diagnostic in the server log. This is especially important for
+	// generic 502/503 responses where the upstream gateway often includes the
+	// actual reason only in its response body. Mask secrets before truncating so
+	// an API key or token cannot be preserved in the log preview.
+	responseBodyPreview := common.LocalLogPreview(common.MaskSensitiveInfo(responseBodyText))
+	logger.LogError(ctx, fmt.Sprintf("upstream response diagnostic: status_code=%d content_type=%q body=%s", resp.StatusCode, resp.Header.Get("Content-Type"), responseBodyPreview))
 	buildErrWithBody := func(message string) error {
 		if message == "" {
 			return fmt.Errorf("bad response status code %d, body: %s", resp.StatusCode, responseBodyText)
