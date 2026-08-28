@@ -122,7 +122,8 @@ func TestNormalizeChannelTestEndpointUsesResponsesForCodexCompatibleModels(t *te
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &baseURL}
 
 	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(channel, "gpt-5.6-sol", ""))
-	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(channel, "gpt-5.5", ""))
+	sharesAIURL := "https://api.sharesai.xyz"
+	assert.Empty(t, normalizeChannelTestEndpoint(&model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &sharesAIURL}, "gpt-5.6-sol", ""))
 	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(&model.Channel{Type: constant.ChannelTypeCodex}, "gpt-4o", ""))
 }
 
