@@ -293,7 +293,7 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 			continue
 		}
 		if channel.Type != constant.ChannelTypeAdvancedCustom {
-			if channel.Type == constant.ChannelTypeCodex && strings.HasPrefix(requestPath, "/v1/chat/completions") {
+			if channel.Type == constant.ChannelTypeCodex && strings.HasPrefix(requestPath, "/v1/chat/completions") && !channel.GetSetting().ChatCompletionsToResponses {
 				continue
 			}
 			if preferNativeResponses && !channel.GetSetting().ResponsesToChatCompletions {

@@ -17,7 +17,10 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	// ResponsesToChatCompletions converts incoming OpenAI Responses requests
 	// to the upstream Chat Completions protocol for this channel.
-	ResponsesToChatCompletions bool   `json:"responses_to_chat_completions,omitempty"`
+	ResponsesToChatCompletions bool `json:"responses_to_chat_completions,omitempty"`
+	// ChatCompletionsToResponses converts incoming Chat Completions requests
+	// to the upstream Responses protocol for this channel.
+	ChatCompletionsToResponses bool   `json:"chat_completions_to_responses,omitempty"`
 	SystemPrompt               string `json:"system_prompt,omitempty"`
 	SystemPromptOverride       bool   `json:"system_prompt_override,omitempty"`
 	// HTTPProtocol controls outbound HTTP version negotiation for this channel.

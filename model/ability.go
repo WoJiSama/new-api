@@ -216,7 +216,16 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 		config, isAdvancedCustom := advancedConfigs[ability.ChannelId]
 		if !isAdvancedCustom {
 			if channelTypes[ability.ChannelId] == constant.ChannelTypeCodex && strings.HasPrefix(requestPath, "/v1/chat/completions") {
-				continue
+				codexConversion := false
+				for _, channel := range channels {
+					if channel.Id == ability.ChannelId {
+						codexConversion = channel.GetSetting().ChatCompletionsToResponses
+						break
+					}
+				}
+				if !codexConversion {
+					continue
+				}
 			}
 			if sensitive && strings.HasPrefix(requestPath, "/v1/responses") {
 				conversion := false

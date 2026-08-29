@@ -91,6 +91,7 @@ export interface ChannelSettings {
   proxy?: string
   pass_through_body_enabled?: boolean
   responses_to_chat_completions?: boolean
+  chat_completions_to_responses?: boolean
   system_prompt?: string
   system_prompt_override?: boolean
   http_protocol?: 'auto' | 'http1' | string

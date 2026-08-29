@@ -272,6 +272,7 @@ export const channelFormSchema = z
     http2_connection_shards: z.number().int().optional(),
     pass_through_body_enabled: z.boolean().optional(),
     responses_to_chat_completions: z.boolean().optional(),
+    chat_completions_to_responses: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
     // Type-specific settings (stored in settings JSON)
@@ -448,6 +449,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   http2_connection_shards: 1,
   pass_through_body_enabled: false,
   responses_to_chat_completions: false,
+  chat_completions_to_responses: false,
   system_prompt: '',
   system_prompt_override: false,
   // Type-specific settings
@@ -489,6 +491,7 @@ export function transformChannelToFormDefaults(
     http2_connection_shards: 1,
     pass_through_body_enabled: false,
     responses_to_chat_completions: false,
+    chat_completions_to_responses: false,
     system_prompt: '',
     system_prompt_override: false,
   }
@@ -509,6 +512,8 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         responses_to_chat_completions:
           parsed.responses_to_chat_completions || false,
+        chat_completions_to_responses:
+          parsed.chat_completions_to_responses || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
       }
@@ -673,6 +678,8 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     responses_to_chat_completions:
       formData.responses_to_chat_completions || false,
+    chat_completions_to_responses:
+      formData.chat_completions_to_responses || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
   }

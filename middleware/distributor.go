@@ -182,7 +182,7 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string, requ
 		// Native Codex channels only serve the Responses protocol. Prevent a
 		// Chat Completions request from reusing a Responses-only sticky entry.
 		if channel.Type == constant.ChannelTypeCodex {
-			return strings.HasPrefix(requestPath, "/v1/responses")
+			return strings.HasPrefix(requestPath, "/v1/responses") || channel.GetSetting().ChatCompletionsToResponses
 		}
 		return true
 	}
