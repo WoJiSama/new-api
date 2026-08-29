@@ -121,7 +121,7 @@ func GetChannelWithOptions(group string, model string, options ChannelSelectionO
 	if err != nil {
 		return nil, err
 	}
-	abilities = filterAbilitiesByRequestPathAndModel(abilities, options.RequestPath, model, options.ProtocolSensitive)
+	abilities = filterAbilitiesByRequestPathAndModelWithOptions(abilities, options.RequestPath, model, options.ProtocolSensitive, options.ExcludedChannelIDs)
 	abilities, err = filterAbilitiesByDailyQuota(abilities)
 	if err != nil {
 		return nil, err
@@ -180,7 +180,11 @@ func filterAbilitiesByDailyQuota(abilities []Ability) ([]Ability, error) {
 // (type 58) channels are path-checked: kept only when one of their routes matches
 // requestPath and model; all other channel types always pass. When requestPath is
 // empty, filtering is skipped.
-func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath string, model string, protocolSensitive ...bool) []Ability {
+func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath string, model string) []Ability {
+	return filterAbilitiesByRequestPathAndModelWithOptions(abilities, requestPath, model, false, nil)
+}
+
+func filterAbilitiesByRequestPathAndModelWithOptions(abilities []Ability, requestPath string, model string, sensitive bool, excluded map[int]struct{}) []Ability {
 	if requestPath == "" || len(abilities) == 0 {
 		return abilities
 	}
@@ -211,7 +215,8 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 	}
 
 	filtered := make([]Ability, 0, len(abilities))
-	sensitive := len(protocolSensitive) > 0 && protocolSensitive[0]
+	chatNative := make([]Ability, 0, len(abilities))
+	chatFallback := make([]Ability, 0, len(abilities))
 	for _, ability := range abilities {
 		config, isAdvancedCustom := advancedConfigs[ability.ChannelId]
 		if !isAdvancedCustom {
@@ -239,12 +244,49 @@ func filterAbilitiesByRequestPathAndModel(abilities []Ability, requestPath strin
 					continue
 				}
 			}
-			filtered = append(filtered, ability)
+			if strings.HasPrefix(requestPath, "/v1/chat/completions") {
+				conversion := false
+				for _, channel := range channels {
+					if channel.Id == ability.ChannelId {
+						conversion = channel.GetSetting().ChatCompletionsToResponses
+						break
+					}
+				}
+				if conversion {
+					chatFallback = append(chatFallback, ability)
+				} else {
+					chatNative = append(chatNative, ability)
+				}
+			} else {
+				filtered = append(filtered, ability)
+			}
 			continue
 		}
 		if config != nil && config.SupportsPathForModel(requestPath, model) {
-			filtered = append(filtered, ability)
+			if strings.HasPrefix(requestPath, "/v1/chat/completions") {
+				route, _ := config.MatchPathForModel(requestPath, model)
+				if route.Converter == "openai_chat_completions_to_openai_responses" {
+					chatFallback = append(chatFallback, ability)
+				} else {
+					chatNative = append(chatNative, ability)
+				}
+			} else {
+				filtered = append(filtered, ability)
+			}
 		}
+	}
+	if strings.HasPrefix(requestPath, "/v1/chat/completions") {
+		hasNative := false
+		for _, ability := range chatNative {
+			if _, ok := excluded[ability.ChannelId]; !ok {
+				hasNative = true
+				break
+			}
+		}
+		if hasNative {
+			return chatNative
+		}
+		return chatFallback
 	}
 	return filtered
 }

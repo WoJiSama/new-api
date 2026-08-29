@@ -134,12 +134,12 @@ func GetRandomSatisfiedChannelWithOptions(group string, model string, options Ch
 
 	channelSyncLock.RLock()
 	// First, try to find channels with the exact model name.
-	channelIDs := filterChannelsByRequestPathAndModel(group2model2channels[group][model], options.RequestPath, model, options.ProtocolSensitive)
+	channelIDs := filterChannelsByRequestPathAndModelWithOptions(group2model2channels[group][model], options.RequestPath, model, options.ProtocolSensitive, options.ExcludedChannelIDs)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channelIDs) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channelIDs = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], options.RequestPath, model, options.ProtocolSensitive)
+		channelIDs = filterChannelsByRequestPathAndModelWithOptions(group2model2channels[group][normalizedModel], options.RequestPath, model, options.ProtocolSensitive, options.ExcludedChannelIDs)
 	}
 
 	if len(channelIDs) == 0 {
@@ -277,13 +277,26 @@ func chooseWeightedChannel(channels []*Channel) (*Channel, error) {
 // only when one of their configured routes matches requestPath and model. All
 // other channel types always pass. When requestPath is empty, filtering is skipped.
 // Caller must hold channelSyncLock (read lock). The cached slice is never mutated.
-func filterChannelsByRequestPathAndModel(channels []int, requestPath string, model string, protocolSensitive ...bool) []int {
+func filterChannelsByRequestPathAndModel(channels []int, requestPath string, model string) []int {
+	return filterChannelsByRequestPathAndModelWithOptions(channels, requestPath, model, false, nil)
+}
+
+func filterChannelsByRequestPathAndModelWithOptions(channels []int, requestPath string, model string, sensitive bool, excluded map[int]struct{}) []int {
 	if requestPath == "" || len(channels) == 0 {
 		return channels
 	}
 	filtered := make([]int, 0, len(channels))
+	chatNative := make([]int, 0, len(channels))
+	chatFallback := make([]int, 0, len(channels))
 	preferNativeResponses := strings.HasPrefix(requestPath, "/v1/responses")
-	sensitive := len(protocolSensitive) > 0 && protocolSensitive[0]
+	hasAvailable := func(ids []int) bool {
+		for _, id := range ids {
+			if _, ok := excluded[id]; !ok {
+				return true
+			}
+		}
+		return false
+	}
 	nativeResponses := make([]int, 0, len(channels))
 	for _, channelId := range channels {
 		channel, ok := channelsIDM[channelId]
@@ -296,6 +309,14 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 			if channel.Type == constant.ChannelTypeCodex && strings.HasPrefix(requestPath, "/v1/chat/completions") && !channel.GetSetting().ChatCompletionsToResponses {
 				continue
 			}
+			if strings.HasPrefix(requestPath, "/v1/chat/completions") && channel.GetSetting().ChatCompletionsToResponses {
+				chatFallback = append(chatFallback, channelId)
+				continue
+			}
+			if strings.HasPrefix(requestPath, "/v1/chat/completions") {
+				chatNative = append(chatNative, channelId)
+				continue
+			}
 			if preferNativeResponses && !channel.GetSetting().ResponsesToChatCompletions {
 				nativeResponses = append(nativeResponses, channelId)
 			} else if !sensitive || !channel.GetSetting().ResponsesToChatCompletions {
@@ -304,6 +325,15 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 			continue
 		}
 		if config := channel2advancedCustomConfig[channelId]; config != nil && config.SupportsPathForModel(requestPath, model) {
+			if strings.HasPrefix(requestPath, "/v1/chat/completions") {
+				route, _ := config.MatchPathForModel(requestPath, model)
+				if route.Converter == "openai_chat_completions_to_openai_responses" {
+					chatFallback = append(chatFallback, channelId)
+				} else {
+					chatNative = append(chatNative, channelId)
+				}
+				continue
+			}
 			if sensitive {
 				route, ok := config.MatchPathForModel(requestPath, model)
 				if ok && route.Converter == "openai_responses_to_openai_chat_completions" {
@@ -312,6 +342,12 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 			}
 			filtered = append(filtered, channelId)
 		}
+	}
+	if strings.HasPrefix(requestPath, "/v1/chat/completions") {
+		if hasAvailable(chatNative) {
+			return chatNative
+		}
+		return chatFallback
 	}
 	if preferNativeResponses && len(nativeResponses) > 0 {
 		return nativeResponses
