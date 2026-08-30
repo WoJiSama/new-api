@@ -72,6 +72,11 @@ const (
 	// channels and must not be converted between Responses and Chat.
 	ContextKeyProtocolSensitiveConversation ContextKey = "protocol_sensitive_conversation"
 
+	// ContextKeyRelayFailureRecoveryProbe marks the single request admitted by
+	// the relay failure limiter to verify whether a different channel can
+	// recover service. Channel distribution must bypass affinity for this probe.
+	ContextKeyRelayFailureRecoveryProbe ContextKey = "relay_failure_recovery_probe"
+
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit
 	// fallback in authHelper (finishAdminAudit) skips its record to avoid

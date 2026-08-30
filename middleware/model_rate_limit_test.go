@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -62,9 +64,55 @@ func TestRedisModelRateLimitUsesConfiguredFixedWindow(t *testing.T) {
 	assert.Equal(t, "60", limited.Header().Get("Retry-After"))
 }
 
-func TestRelayFailureRateLimitBlocksOnlyRepeatedUnavailableResponses(t *testing.T) {
+func TestRelayFailureRateLimitAllowsOneFreshRecoveryProbe(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	redisServer, _ := useRateLimitMiniRedis(t)
+	_, _ = useRateLimitMiniRedis(t)
+	previousEnabled := setting.RelayFailureRateLimitEnabled
+	previousCount := setting.RelayFailureRateLimitCount
+	previousDuration := setting.RelayFailureRateLimitDurationSeconds
+	setting.RelayFailureRateLimitEnabled = true
+	setting.RelayFailureRateLimitCount = 2
+	setting.RelayFailureRateLimitDurationSeconds = 30
+	t.Cleanup(func() {
+		setting.RelayFailureRateLimitEnabled = previousEnabled
+		setting.RelayFailureRateLimitCount = previousCount
+		setting.RelayFailureRateLimitDurationSeconds = previousDuration
+	})
+
+	router := gin.New()
+	router.GET(
+		"/relay",
+		func(c *gin.Context) { c.Set("token_id", 7) },
+		RelayFailureRateLimit(),
+		func(c *gin.Context) {
+			c.Set("use_channel", []string{"9"})
+			if common.GetContextKeyBool(c, constant.ContextKeyRelayFailureRecoveryProbe) {
+				c.Status(http.StatusNoContent)
+				return
+			}
+			c.Status(http.StatusServiceUnavailable)
+		},
+	)
+
+	request := func(tokenID string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/relay", nil)
+		router.ServeHTTP(recorder, request)
+		return recorder
+	}
+
+	assert.Equal(t, http.StatusServiceUnavailable, request("7").Code)
+	assert.Equal(t, http.StatusServiceUnavailable, request("7").Code)
+	// This used to be rejected locally before Distribute could try another
+	// channel. It is now a single recovery probe and resets the failure window
+	// after the fresh selection succeeds.
+	assert.Equal(t, http.StatusNoContent, request("7").Code)
+	assert.Equal(t, http.StatusServiceUnavailable, request("7").Code)
+}
+
+func TestRelayFailureRateLimitIgnoresLocalSelectionFailures(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, _ = useRateLimitMiniRedis(t)
 	previousEnabled := setting.RelayFailureRateLimitEnabled
 	previousCount := setting.RelayFailureRateLimitCount
 	previousDuration := setting.RelayFailureRateLimitDurationSeconds
@@ -85,19 +133,49 @@ func TestRelayFailureRateLimitBlocksOnlyRepeatedUnavailableResponses(t *testing.
 		func(c *gin.Context) { c.Status(http.StatusServiceUnavailable) },
 	)
 
-	request := func(tokenID string) *httptest.ResponseRecorder {
+	for range 4 {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/relay", nil)
-		router.ServeHTTP(recorder, request)
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/relay", nil))
+		assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	}
+}
+
+func TestRelayFailureRateLimitBlocksAfterFailedRecoveryProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, _ = useRateLimitMiniRedis(t)
+	previousEnabled := setting.RelayFailureRateLimitEnabled
+	previousCount := setting.RelayFailureRateLimitCount
+	previousDuration := setting.RelayFailureRateLimitDurationSeconds
+	setting.RelayFailureRateLimitEnabled = true
+	setting.RelayFailureRateLimitCount = 2
+	setting.RelayFailureRateLimitDurationSeconds = 30
+	t.Cleanup(func() {
+		setting.RelayFailureRateLimitEnabled = previousEnabled
+		setting.RelayFailureRateLimitCount = previousCount
+		setting.RelayFailureRateLimitDurationSeconds = previousDuration
+	})
+
+	router := gin.New()
+	router.GET(
+		"/relay",
+		func(c *gin.Context) { c.Set("token_id", 7) },
+		RelayFailureRateLimit(),
+		func(c *gin.Context) {
+			c.Set("use_channel", []string{"9"})
+			c.Status(http.StatusServiceUnavailable)
+		},
+	)
+
+	request := func() *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/relay", nil))
 		return recorder
 	}
 
-	assert.Equal(t, http.StatusServiceUnavailable, request("7").Code)
-	assert.Equal(t, http.StatusServiceUnavailable, request("7").Code)
-	limited := request("7")
+	assert.Equal(t, http.StatusServiceUnavailable, request().Code)
+	assert.Equal(t, http.StatusServiceUnavailable, request().Code)
+	assert.Equal(t, http.StatusServiceUnavailable, request().Code, "one recovery probe is allowed")
+	limited := request()
 	assert.Equal(t, http.StatusTooManyRequests, limited.Code)
 	assert.Equal(t, "30", limited.Header().Get("Retry-After"))
-
-	redisServer.FastForward(30 * time.Second)
-	assert.Equal(t, http.StatusServiceUnavailable, request("7").Code)
 }
