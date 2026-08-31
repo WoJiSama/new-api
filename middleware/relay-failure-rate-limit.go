@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 
 const relayFailureRateLimitMark = "RFL"
 const relayFailureRecoveryProbeMark = "RFLP"
+const relayFailureStorageTimeout = 2 * time.Second
 
 type relayFailureWindow struct {
 	mu          sync.Mutex
@@ -93,13 +95,13 @@ func finishRelayFailureRateLimit(c *gin.Context, key string, duration time.Durat
 		return
 	}
 	if c.Writer.Status() < http.StatusInternalServerError {
-		if err := clearRelayFailures(c, key); err != nil {
+		if err := clearRelayFailures(key); err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("relay failure limiter clear failed: %v", err))
 			inMemoryClearRelayFailures(key)
 		}
 		return
 	}
-	if err := recordRelayFailure(c, key, setting.RelayFailureRateLimitCount, duration); err != nil {
+	if err := recordRelayFailure(key, setting.RelayFailureRateLimitCount, duration); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("relay failure limiter record failed: %v", err))
 		inMemoryRecordRelayFailure(key, duration)
 	}
@@ -150,12 +152,14 @@ func relayFailureLimitReached(c *gin.Context, identity string, limit int, durati
 	return true, ttl, nil
 }
 
-func recordRelayFailure(c *gin.Context, identity string, limit int, duration time.Duration) error {
+func recordRelayFailure(identity string, limit int, duration time.Duration) error {
 	if !common.RedisEnabled || common.RDB == nil {
 		inMemoryRecordRelayFailure(identity, duration)
 		return nil
 	}
-	_, _, _, err := redisFixedWindowTake(c.Request.Context(), relayFailureRedisKey(identity), limit, int64(duration.Seconds()))
+	ctx, cancel := context.WithTimeout(context.Background(), relayFailureStorageTimeout)
+	defer cancel()
+	_, _, _, err := redisFixedWindowTake(ctx, relayFailureRedisKey(identity), limit, int64(duration.Seconds()))
 	return err
 }
 
@@ -166,12 +170,14 @@ func takeRelayFailureRecoveryProbe(c *gin.Context, identity string, duration tim
 	return common.RDB.SetNX(c.Request.Context(), relayFailureRecoveryProbeRedisKey(identity), "1", duration).Result()
 }
 
-func clearRelayFailures(c *gin.Context, identity string) error {
+func clearRelayFailures(identity string) error {
 	if !common.RedisEnabled || common.RDB == nil {
 		inMemoryClearRelayFailures(identity)
 		return nil
 	}
-	return common.RDB.Del(c.Request.Context(), relayFailureRedisKey(identity), relayFailureRecoveryProbeRedisKey(identity)).Err()
+	ctx, cancel := context.WithTimeout(context.Background(), relayFailureStorageTimeout)
+	defer cancel()
+	return common.RDB.Del(ctx, relayFailureRedisKey(identity), relayFailureRecoveryProbeRedisKey(identity)).Err()
 }
 
 func inMemoryRelayFailureLimitReached(identity string, limit int, duration time.Duration) (bool, time.Duration) {

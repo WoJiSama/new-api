@@ -87,6 +87,9 @@ func TestRelayFailureRateLimitAllowsOneFreshRecoveryProbe(t *testing.T) {
 		func(c *gin.Context) {
 			c.Set("use_channel", []string{"9"})
 			if common.GetContextKeyBool(c, constant.ContextKeyRelayFailureRecoveryProbe) {
+				requestCtx, cancel := context.WithCancel(c.Request.Context())
+				c.Request = c.Request.WithContext(requestCtx)
+				cancel()
 				c.Status(http.StatusNoContent)
 				return
 			}
