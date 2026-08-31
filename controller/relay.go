@@ -424,8 +424,8 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 }
 
 // clearAffinityOnTransientUpstreamFailure releases a session's sticky channel
-// only for failures that indicate the upstream is temporarily unavailable.
-// Ordinary client/provider errors keep the affinity contract intact.
+// only for failures that indicate the selected upstream cannot serve the next
+// attempt. Ordinary client/provider errors keep the affinity contract intact.
 func clearAffinityOnTransientUpstreamFailure(c *gin.Context, err *types.NewAPIError) bool {
 	if c == nil || err == nil || !isTransientUpstreamFailure(err) {
 		return false
@@ -443,6 +443,7 @@ func isTransientUpstreamFailure(err *types.NewAPIError) bool {
 		return false
 	}
 	if err.StatusCode == http.StatusBadGateway ||
+		err.StatusCode == http.StatusTooManyRequests ||
 		err.StatusCode == http.StatusServiceUnavailable ||
 		err.StatusCode == http.StatusGatewayTimeout {
 		return true
