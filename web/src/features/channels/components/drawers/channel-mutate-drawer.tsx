@@ -81,6 +81,7 @@ import {
 } from '@/components/ui/form'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Input } from '@/components/ui/input'
+import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import {
   Select,
   SelectContent,
@@ -615,6 +616,12 @@ export function ChannelMutateDrawer({
   currentRow,
 }: ChannelMutateDrawerProps) {
   const { t } = useTranslation()
+  const dailyQuotaCurrency = getCurrencyLabel()
+  const { config: currencyConfig, meta: currencyMeta } = getCurrencyDisplay()
+  const dailyQuotaStep =
+    currencyMeta.kind === 'tokens'
+      ? 1
+      : currencyMeta.exchangeRate / currencyConfig.quotaPerUnit
   const queryClient = useQueryClient()
   const { setOpen } = useChannels()
   const currentUser = useAuthStore((s) => s.auth.user)
@@ -3704,12 +3711,16 @@ export function ChannelMutateDrawer({
                                 name='daily_quota_limit'
                                 render={({ field }) => (
                                   <FormItem>
-                                    <FormLabel>{t('Daily Quota')}</FormLabel>
+                                    <FormLabel>
+                                      {t('Daily Quota ({{currency}})', {
+                                        currency: dailyQuotaCurrency,
+                                      })}
+                                    </FormLabel>
                                     <FormControl>
                                       <Input
                                         type='number'
                                         min='0'
-                                        step='1'
+                                        step={dailyQuotaStep}
                                         placeholder='0'
                                         {...field}
                                         onChange={(e) =>
@@ -3719,7 +3730,8 @@ export function ChannelMutateDrawer({
                                     </FormControl>
                                     <FormDescription>
                                       {t(
-                                        'Daily channel quota limit in quota units. Set 0 for no limit.'
+                                        'Daily channel budget in {{currency}}. Set 0 for no limit.',
+                                        { currency: dailyQuotaCurrency }
                                       )}
                                     </FormDescription>
                                     <FormMessage />

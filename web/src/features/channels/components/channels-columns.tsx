@@ -554,9 +554,15 @@ function DailyQuotaCell({ channel }: { channel: Channel }) {
   const committedAndReserved = used + reserved
   const exhausted = isLimited && committedAndReserved >= limit
   const remaining = Math.max(0, limit - committedAndReserved)
-  const usedDisplay = formatQuotaWithCurrency(used, { abbreviate: true })
+  const usedDisplay = formatQuotaWithCurrency(used, {
+    abbreviate: true,
+    minimumNonZero: 0.0001,
+  })
   const display = isLimited
-    ? `${usedDisplay} / ${formatQuotaWithCurrency(limit, { abbreviate: true })}`
+    ? `${usedDisplay} / ${formatQuotaWithCurrency(limit, {
+        abbreviate: true,
+        minimumNonZero: 0.0001,
+      })}`
     : `${t('Used:')} ${usedDisplay} · ${t('Unlimited')}`
 
   return (
@@ -577,11 +583,24 @@ function DailyQuotaCell({ channel }: { channel: Channel }) {
         <TooltipContent>
           {sensitiveVisible ? (
             <div className='space-y-1 text-xs'>
-              <p>{`${t('Used:')} ${formatQuotaWithCurrency(used)}`}</p>
+              <p>
+                {`${t('Used:')} ${formatQuotaWithCurrency(used, {
+                  minimumNonZero: 0.0001,
+                })}`}
+              </p>
               {isLimited ? (
                 <>
-                  <p>{`${t('Reserved:')} ${formatQuotaWithCurrency(reserved)}`}</p>
-                  <p>{`${t('Remaining:')} ${formatQuotaWithCurrency(remaining)}`}</p>
+                  <p>
+                    {`${t('Reserved:')} ${formatQuotaWithCurrency(reserved, {
+                      minimumNonZero: 0.0001,
+                    })}`}
+                  </p>
+                  <p>
+                    {`${t('Remaining:')} ${formatQuotaWithCurrency(
+                      remaining,
+                      { minimumNonZero: 0.0001 }
+                    )}`}
+                  </p>
                 </>
               ) : (
                 <p>{t('Unlimited')}</p>

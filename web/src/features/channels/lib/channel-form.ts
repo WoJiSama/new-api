@@ -19,6 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  parseQuotaFromDollars,
+  quotaUnitsToDollars,
+} from '@/lib/format'
+
+import {
   CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
   ERROR_MESSAGES,
@@ -211,7 +216,7 @@ export const channelFormSchema = z
       ),
     priority: z.number().optional(),
     weight: z.number().optional(),
-    daily_quota_limit: z.number().int().nonnegative().optional(),
+    daily_quota_limit: z.number().nonnegative().optional(),
     same_priority_retry_rpm_limit: z.number().int().min(0).max(1000000).optional(),
     channel_recovery_retry_rules: z
       .array(
@@ -552,9 +557,8 @@ export function transformChannelToFormDefaults(
     try {
       const parsed = JSON.parse(channel.settings)
       vertexKeyType = parsed.vertex_key_type || 'json'
-      dailyQuotaLimit = Math.max(
-        0,
-        Math.trunc(Number(parsed.daily_quota_limit) || 0)
+      dailyQuotaLimit = quotaUnitsToDollars(
+        Math.max(0, Math.trunc(Number(parsed.daily_quota_limit) || 0))
       )
       samePriorityRetryRpmLimit = Math.max(
         0,
@@ -718,7 +722,7 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
 
   const dailyQuotaLimit = Math.max(
     0,
-    Math.trunc(formData.daily_quota_limit || 0)
+    parseQuotaFromDollars(formData.daily_quota_limit || 0)
   )
   if (dailyQuotaLimit > 0) {
     settingsObj.daily_quota_limit = dailyQuotaLimit
