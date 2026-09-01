@@ -4361,9 +4361,13 @@ export function ChannelMutateDrawer({
                                 render={({ field }) => (
                                   <FormItem className='flex items-center justify-between px-4 py-3'>
                                     <div className='space-y-0.5'>
-                                      <FormLabel>Responses 转 Chat</FormLabel>
+                                      <FormLabel>
+                                        上游仅支持 Chat Completions
+                                      </FormLabel>
                                       <FormDescription>
-                                        {t('Keep /v1/responses for clients, but send /v1/chat/completions upstream')}
+                                        客户端 Responses → 上游 Chat
+                                        Completions。客户端仍请求
+                                        /v1/responses。
                                       </FormDescription>
                                     </div>
                                     <FormControl>
@@ -4382,9 +4386,13 @@ export function ChannelMutateDrawer({
                                 render={({ field }) => (
                                   <FormItem className='flex items-center justify-between px-4 py-3'>
                                     <div className='space-y-0.5'>
-                                      <FormLabel>Chat 转 Responses</FormLabel>
+                                      <FormLabel>
+                                        上游仅支持 Responses
+                                      </FormLabel>
                                       <FormDescription>
-                                        {t('Keep /v1/chat/completions for clients, but send /v1/responses upstream')}
+                                        客户端 Chat Completions → 上游
+                                        Responses。客户端仍请求
+                                        /v1/chat/completions。
                                       </FormDescription>
                                     </div>
                                     <FormControl>
