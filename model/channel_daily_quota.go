@@ -189,3 +189,21 @@ func GetChannelDailyQuota(channelID int, day string) (*ChannelDailyQuota, error)
 	}
 	return row, nil
 }
+
+// IsChannelDailyQuotaExhausted reports whether a configured channel has no
+// remaining daily budget. Unlimited channels and missing ledger rows are not
+// exhausted.
+func IsChannelDailyQuotaExhausted(channel *Channel) (bool, error) {
+	if channel == nil {
+		return false, nil
+	}
+	limit := GetChannelDailyQuotaLimit(channel)
+	if limit <= 0 {
+		return false, nil
+	}
+	row, err := GetChannelDailyQuota(channel.Id, channelQuotaDay())
+	if err != nil || row == nil {
+		return false, err
+	}
+	return row.Used+row.Reserved >= limit, nil
+}

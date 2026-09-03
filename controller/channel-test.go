@@ -95,6 +95,11 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if exhausted, err := model.IsChannelDailyQuotaExhausted(channel); err != nil {
+		return testResult{localErr: fmt.Errorf("检查渠道每日额度失败: %w", err)}
+	} else if exhausted {
+		return testResult{localErr: fmt.Errorf("渠道 #%d 今日额度不足", channel.Id)}
+	}
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,

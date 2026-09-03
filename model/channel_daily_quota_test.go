@@ -50,6 +50,21 @@ func TestChannelDailyQuotaReservationAndSettlement(t *testing.T) {
 	assert.True(t, reserved)
 }
 
+func TestIsChannelDailyQuotaExhausted(t *testing.T) {
+	truncateTables(t)
+	useChannelDailyQuotaDay(t, time.Date(2026, time.August, 10, 12, 0, 0, 0, time.Local))
+	channel := testDailyQuotaChannel(91008, 100)
+
+	exhausted, err := IsChannelDailyQuotaExhausted(channel)
+	require.NoError(t, err)
+	assert.False(t, exhausted)
+	require.NoError(t, RecordChannelDailyQuotaUsage(channel.Id, 100))
+
+	exhausted, err = IsChannelDailyQuotaExhausted(channel)
+	require.NoError(t, err)
+	assert.True(t, exhausted)
+}
+
 func TestUnrestrictedChannelDailyQuotaIsRecordedAndPopulated(t *testing.T) {
 	truncateTables(t)
 	useChannelDailyQuotaDay(t, time.Date(2026, time.August, 12, 12, 0, 0, 0, time.Local))
