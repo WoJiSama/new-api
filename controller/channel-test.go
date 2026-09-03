@@ -98,6 +98,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	if exhausted, err := model.IsChannelDailyQuotaExhausted(channel); err != nil {
 		return testResult{localErr: fmt.Errorf("检查渠道每日额度失败: %w", err)}
 	} else if exhausted {
+		service.DisableChannelForDailyQuota(channel)
 		return testResult{localErr: fmt.Errorf("渠道 #%d 今日额度不足", channel.Id)}
 	}
 	tik := time.Now()
