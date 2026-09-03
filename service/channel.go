@@ -36,6 +36,25 @@ func DisableChannel(channelError types.ChannelError, reason string, sourceErrors
 	}
 }
 
+// DisableChannelForDailyQuota marks an enabled channel as auto-disabled when
+// its configured daily budget is exhausted. Daily quota exhaustion is a local
+// scheduling condition, so it must not depend on the upstream-error keyword or
+// status-code rules used by DisableChannel.
+func DisableChannelForDailyQuota(channel *model.Channel) {
+	if channel == nil || !channel.GetAutoBan() {
+		return
+	}
+	if channel.Status != common.ChannelStatusEnabled {
+		return
+	}
+	reason := fmt.Sprintf("渠道 #%d 今日额度不足", channel.Id)
+	if model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusAutoDisabled, reason) {
+		subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channel.Name, channel.Id)
+		content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channel.Name, channel.Id, reason)
+		NotifyRootUser(formatNotifyType(channel.Id, common.ChannelStatusAutoDisabled), subject, content)
+	}
+}
+
 // RefreshChannelRecoveryRetry starts a fresh custom wait after a recovery test
 // fails. When its error no longer matches a rule, clearing the deadline makes
 // the next check naturally fall back to the global monitor interval.

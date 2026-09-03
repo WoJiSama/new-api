@@ -220,6 +220,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				break
 			}
 			if !reserved {
+				service.DisableChannelForDailyQuota(channel)
 				if fixedChannelError := fixedChannelDailyQuotaExhaustionError(relayInfo, channel); fixedChannelError != nil {
 					newAPIError = fixedChannelError
 					break
