@@ -73,6 +73,34 @@ Preserve the completed daily quota implementation and add upgrade-friendly per-c
 - [ ] Run backend/frontend verification and deploy the complete branch
 - **Status:** in_progress
 
+### Phase 13: Failure-Limiter Failover Preservation
+- [x] Trace the production 429 path and define the retry/failover boundary
+- [x] Let an otherwise rate-limited relay request make one fresh channel-selection attempt
+- [x] Avoid recording local channel-selection failures as upstream failures
+- [x] Add regression coverage, verify, deploy, and check production health
+- **Status:** complete
+
+### Phase 14: Daily Quota Currency UX
+- [x] Identify the raw quota-unit values behind the confusing display
+- [x] Make channel daily-budget input use the configured display currency
+- [x] Preserve nonzero tiny amounts in the daily-quota column
+- [x] Verify the frontend build
+- **Status:** complete
+
+### Phase 15: Client-Cancellation Failure State Cleanup
+- [x] Correlate intermittent local 429s with production logs and Redis behavior
+- [x] Decouple relay-failure state writes from canceled client request contexts
+- [x] Add regression coverage and run full backend verification
+- [x] Deploy through the existing container and verify health
+- **Status:** complete
+
+### Phase 16: Sticky-Session 429 Failover
+- [x] Treat dispatched upstream 429 as a transient sticky-channel failure
+- [x] Add regression coverage for affinity release on 429
+- [x] Run full backend verification and production Linux build
+- [x] Deploy through the existing container and verify health
+- **Status:** complete
+
 ## Constraints
 
 - Keep the custom commit series limited to product changes so it can be rebased onto future official releases.

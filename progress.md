@@ -60,3 +60,31 @@
 
 - Confirmed the single-channel manual test endpoint currently only returns `{success:false}` on failure; it does not call the existing disable flow. The test-all task path already disables eligible failures.
 - The requested behavior will use `service.DisableChannel` directly for enabled channels with `AutoBan` enabled, bypassing the global automatic-disable switch because this is an explicit manual action.
+
+## 2026-08-30 Failure-Limiter Failover Preservation
+
+- User reported `exceeded retry limit, last status: 429` although resubmitting later succeeds. Confirmed the relay failure limiter returns a local 429 before `Distribute`, preventing a new selection/failover attempt after repeated 5xx responses.
+- Started Phase 13 to retain protection from runaway retries without blocking recovery through another channel.
+- Added recovery-probe behavior and deterministic middleware regressions for successful recovery, failed recovery re-blocking, and local pre-dispatch 503 handling. Full `go test ./...` passed; production Linux binary SHA-256 was `9e2c323f7ddf3575fed899ec5688a898d0d1937b4dab9110eecb27e766148f5a`.
+- Deployed commit `1f534e441` through the existing `new-api` container only. The prior image is `wojisama/new-api:backup-before-relay-failure-failover-20260830`, and the prior executable is `/root/new-api-pre-relay-failure-failover-20260830`. After restart, `/api/status` returned 200, the installed binary matched the expected SHA-256, and steady-state CPU was 0.01% with 26.27 MiB memory.
+
+## 2026-08-31 Daily Quota Currency UX
+
+- Investigated the `$0 / $0.0001` daily quota display. It originates from raw limits of 30 and 40 units on channels 10 and 9; 500,000 internal units equal one displayed USD.
+- Updated channel daily-budget entry to use the configured display currency and added nonzero minimum formatting in the list/tooltip. `web/` typecheck and production build pass. Existing channel limits were deliberately left untouched pending the user's desired dollar budgets.
+- Committed the UI fix as `fdd27f25f` and deployed it in the existing `new-api` container. The installed binary SHA-256 is `48c4a27a917dbd70aec7598e17095c0129c16cfdc41758c7325c35ab4c82f63f`; `/api/status` returned 200 after restart, CPU was 0.13%, and a live relay request succeeded. Rollback image: `wojisama/new-api:backup-before-daily-quota-currency-20260831`.
+
+## 2026-08-31 Sticky-Session 429 Failover
+
+- Confirmed request `202608311217524365375598268d9d6VbtdRqQr` received a real upstream `429 DAILY_LIMIT_EXCEEDED` on sticky channel 9. The default affinity rule's `skip_retry_on_failure=true` stopped the request before the normal 429 retry path because 429 was not classified as a transient upstream failure.
+- Added upstream 429 to `isTransientUpstreamFailure`, so a dispatched 429 clears the current affinity and permits the existing retry loop to select another eligible channel. Added both classification coverage and a real affinity-cache regression proving the cached channel is removed.
+- Verification passed: `go test ./controller ./service ./middleware -count=1`, `go test ./...`, and `git diff --check`. The Linux amd64 binary SHA-256 is `107b41312c39696587554f4f77f1fe34a0b90c0e566867a77541deafef43b24c`.
+- Committed the product change as `51e207053 fix: fail over sticky sessions after upstream 429`; only `controller/relay.go` and `controller/relay_affinity_retry_test.go` were included.
+- Deployed through the existing `new-api` container only. The previous binary is `/root/new-api-pre-sticky-429-failover-20260831`, and rollback image `wojisama/new-api:backup-before-sticky-429-failover-20260831` is `sha256:0d8e5aff1fe1...`. The installed image is `wojisama/new-api:sticky-429-failover-20260831` (`sha256:be8f073d71bc...`).
+- Post-restart verification passed: installed binary SHA-256 matched, `/api/status` returned 200, CPU was 0.12%, memory was 39.3 MiB, startup completed normally, and live `/v1/responses` requests returned 200.
+
+## 2026-08-31 Client-Cancellation Failure State Cleanup
+
+- Investigated the recurring client-visible `exceeded retry limit, last status: 429`. Production logs established that the relay failure limiter repeatedly failed to clear successful token state because the client request context was already canceled.
+- Added independent bounded Redis contexts for recording/clearing relay failure state and a cancellation regression. `go test ./...` passed; Linux binary SHA-256 `d0a49a183eca68eb195b2f1a0d9bdba4d0d97ff666c678f9ec334357a5a844c4` was deployed in the existing container.
+- Post-restart: `/api/status` was 200, installed binary checksum matched, and the container was serving live relay traffic. Rollback image: `wojisama/new-api:backup-before-relay-failure-context-20260831`.
